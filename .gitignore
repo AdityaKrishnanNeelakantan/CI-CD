@@ -2,6 +2,8 @@
 .pycache-ci/
 .pytest_cache/
 .venv*/
+.artifact-delivery-work/
+artifact-delivery/
 build/
 dist/
 *.egg-info/

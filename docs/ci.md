@@ -1,8 +1,9 @@
-# CI/CD Phase 1 and 2A
+# CI/CD Phase 1, 2A, and 2B
 
 Phase 1 stabilizes the project as an installable Python package and makes CI
 truthful about which layer failed. Phase 2A adds package build verification.
-Deployment is intentionally out of scope.
+Phase 2B adds portable twin artifact delivery verification. Deployment is
+intentionally out of scope.
 
 ## Local Commands
 
@@ -64,6 +65,12 @@ python -m venv .venv-wheel
 .venv-wheel/bin/synth-platform --help
 ```
 
+Build and verify a portable twin delivery:
+
+```bash
+python scripts/build_artifact_delivery.py --output-dir artifact-delivery
+```
+
 ## CI Jobs
 
 - `package-smoke`: validates packaging, editable install, imports, compile, and
@@ -77,8 +84,11 @@ python -m venv .venv-wheel
   broader schema/e2e coverage, and future provider-backed tests.
 - `build-package`: builds the wheel and source distribution, installs the wheel
   in a fresh environment, runs package smoke checks, and uploads `dist/`.
+- `artifact-delivery`: trains a small portable twin, deletes the source
+  database, generates synthetic tables from the artifact only, validates the
+  result, checks source canaries do not leak, and uploads the delivery bundle.
 
-## Phase 1 Boundaries
+## Current Boundaries
 
 These phases do not deploy Streamlit, publish packages, build Docker images,
 create an artifact registry, or automate releases. Those belong to later phases

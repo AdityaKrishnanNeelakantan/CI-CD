@@ -1,7 +1,8 @@
-# CI/CD Phase 1
+# CI/CD Phase 1 and 2A
 
 Phase 1 stabilizes the project as an installable Python package and makes CI
-truthful about which layer failed. Deployment is intentionally out of scope.
+truthful about which layer failed. Phase 2A adds package build verification.
+Deployment is intentionally out of scope.
 
 ## Local Commands
 
@@ -51,6 +52,18 @@ Run heavy checks manually or on schedule:
 pytest tests/integration/schema tests/integration/database_pdf/test_docling_pdf_pipeline.py tests/e2e -q
 ```
 
+Build and verify package artifacts:
+
+```bash
+python -m pip install --upgrade build
+python -m build
+python -m venv .venv-wheel
+.venv-wheel/bin/python -m pip install --upgrade pip
+.venv-wheel/bin/python -m pip install dist/*.whl
+.venv-wheel/bin/python -c "import synth_platform; print(synth_platform.__version__)"
+.venv-wheel/bin/synth-platform --help
+```
+
 ## CI Jobs
 
 - `package-smoke`: validates packaging, editable install, imports, compile, and
@@ -62,9 +75,11 @@ pytest tests/integration/schema tests/integration/database_pdf/test_docling_pdf_
   heaviest model/provider paths.
 - `integration-heavy`: manual or scheduled job for Docling, Streamlit, OCR,
   broader schema/e2e coverage, and future provider-backed tests.
+- `build-package`: builds the wheel and source distribution, installs the wheel
+  in a fresh environment, runs package smoke checks, and uploads `dist/`.
 
 ## Phase 1 Boundaries
 
-This phase does not deploy Streamlit, publish packages, build Docker images,
+These phases do not deploy Streamlit, publish packages, build Docker images,
 create an artifact registry, or automate releases. Those belong to later phases
 after the package and CI quality gates are stable.

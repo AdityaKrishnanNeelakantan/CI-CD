@@ -7,7 +7,7 @@ name = "synth-platform"
 version = "3.0.0"
 description = "Unified synthetic-data intelligence platform for schema, database, and document twin workflows"
 requires-python = ">=3.11"
-readme = "docs/architecture.md"
+readme = "README.md"
 authors = [
   { name = "Synth Platform Contributors" }
 ]

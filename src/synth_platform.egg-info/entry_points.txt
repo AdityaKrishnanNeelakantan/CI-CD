@@ -1,0 +1,2 @@
+[console_scripts]
+synth-platform = synth_platform.interfaces.cli.app:main

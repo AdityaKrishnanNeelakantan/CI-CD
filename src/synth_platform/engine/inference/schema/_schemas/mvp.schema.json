@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/rasinmuhammed/mvp/main/schema/mvp.schema.json",
+  "title": "MVP YAML Schema",
+  "description": "Declarative synthetic-data schema for MVP. Run `mvp generate` to produce data from this file.",
+  "type": "object",
+  "required": ["name", "tables"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable name for this dataset."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description of what this data represents."
+    },
+    "domain": {
+      "type": "string",
+      "description": "Business domain hint used by realistic priors."
+    },
+    "seed": {
+      "type": "integer",
+      "description": "Random seed for reproducibility."
+    },
+    "rows": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Default row count for tables that do not specify their own."
+    },
+    "locale": {
+      "type": "string",
+      "description": "Locale for names, addresses, currencies, and other locale-aware values."
+    },
+    "banking": {
+      "type": "object",
+      "description": "Optional banking defaults for banking-specific column types."
+    },
+    "tables": {
+      "type": "object",
+      "description": "Tables to generate, keyed by table name.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/table"
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "description": "Foreign-key relationships between tables.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Arrow shorthand, for example `users.id -> orders.user_id`."
+          },
+          {
+            "$ref": "#/$defs/relationship"
+          }
+        ]
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Business-rule constraints enforced during generation.",
+      "items": {
+        "$ref": "#/$defs/constraint"
+      }
+    },
+    "events": {
+      "type": "array",
+      "description": "Scenario events that modify data conditionally.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "outcome_curves": {
+      "type": "array",
+      "description": "Aggregate target curves the generator should hit.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "noise": {
+      "type": "object",
+      "description": "Optional noise injection rules."
+    },
+    "realism": {
+      "type": "object",
+      "description": "Optional realism planning and reporting settings."
+    }
+  },
+  "$defs": {
+    "table": {
+      "type": "object",
+      "required": ["columns"],
+      "additionalProperties": false,
+      "properties": {
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of rows to generate for this table."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable purpose of the table."
+        },
+        "is_reference": {
+          "type": "boolean",
+          "description": "True for small lookup tables backed by inline rows."
+        },
+        "inline_data": {
+          "type": "array",
+          "description": "Inline rows for reference tables.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "columns": {
+          "type": "object",
+          "description": "Column definitions, keyed by column name.",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/column"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "description": "Table-scoped constraints.",
+          "items": {
+            "$ref": "#/$defs/constraint"
+          }
+        },
+        "correlations": {
+          "type": "array",
+          "description": "Pairwise correlations to enforce between numeric columns.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "workflow_preset": {
+          "type": "string",
+          "description": "Optional workflow preset name."
+        },
+        "workflow_config": {
+          "type": "object",
+          "description": "Optional workflow configuration."
+        }
+      }
+    },
+    "column": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Column data type.",
+          "enum": [
+            "int",
+            "integer",
+            "float",
+            "number",
+            "date",
+            "datetime",
+            "time",
+            "categorical",
+            "string",
+            "text",
+            "boolean",
+            "bool",
+            "foreign_key",
+            "email",
+            "uuid",
+            "json",
+            "iban",
+            "swift_bic",
+            "routing_number",
+            "account_number",
+            "ssn",
+            "aadhaar",
+            "credit_card"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "unique": {
+          "type": "boolean"
+        },
+        "nullable": {
+          "type": "boolean"
+        },
+        "primary_key": {
+          "type": "boolean"
+        },
+        "references": {
+          "type": "string",
+          "description": "Foreign-key reference in `table.column` form."
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": ["string", "number", "boolean", "null"]
+          }
+        },
+        "probabilities": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "text_type": {
+          "type": "string"
+        },
+        "formula": {
+          "type": "string"
+        }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["parent_table", "child_table", "parent_key", "child_key"],
+      "additionalProperties": false,
+      "properties": {
+        "parent_table": {
+          "type": "string"
+        },
+        "child_table": {
+          "type": "string"
+        },
+        "parent_key": {
+          "type": "string"
+        },
+        "child_key": {
+          "type": "string"
+        }
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "column": {
+          "type": "string"
+        },
+        "column_a": {
+          "type": "string"
+        },
+        "column_b": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

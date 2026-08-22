@@ -1,0 +1,14 @@
+name: minimal_company
+seed: 42
+tables:
+  users:
+    rows: 10
+    columns:
+      id:
+        type: int
+        unique: true
+        min: 1
+        max: 1000
+      status:
+        type: categorical
+        choices: [active, inactive]

@@ -71,6 +71,12 @@ Build and verify a portable twin delivery:
 python scripts/build_artifact_delivery.py --output-dir artifact-delivery
 ```
 
+Smoke test the installed Streamlit UI launcher:
+
+```bash
+python scripts/smoke_streamlit_ui.py
+```
+
 Create a release:
 
 ```bash
@@ -98,6 +104,8 @@ twin delivery, creates checksums, and publishes a GitHub Release.
 - `artifact-delivery`: trains a small portable twin, deletes the source
   database, generates synthetic tables from the artifact only, validates the
   result, checks source canaries do not leak, and uploads the delivery bundle.
+- `ui-smoke`: installs the package with UI dependencies, starts
+  `synth-platform-ui`, and verifies the Streamlit health endpoint.
 - `release`: runs on version tags, builds verified package artifacts and a
   portable twin delivery archive, generates checksums, and publishes a GitHub
   Release.

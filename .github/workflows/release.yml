@@ -36,9 +36,11 @@ jobs:
         run: |
           python -m venv .venv-wheel
           .venv-wheel/bin/python -m pip install --upgrade pip
-          .venv-wheel/bin/python -m pip install dist/*.whl
+          WHEEL="$(ls dist/*.whl)"
+          .venv-wheel/bin/python -m pip install "${WHEEL}[ui]"
           .venv-wheel/bin/python -c "import synth_platform; print(synth_platform.__version__)"
           .venv-wheel/bin/synth-platform --help
+          python scripts/smoke_streamlit_ui.py --command .venv-wheel/bin/synth-platform-ui
 
       - name: Install artifact dependencies
         run: python -m pip install -e ".[schema,database,pdf,parquet]"

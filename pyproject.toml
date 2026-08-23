@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-platform"
-version = "3.0.1"
+version = "3.0.2"
 description = "Unified synthetic-data intelligence platform for schema, database, and document twin workflows"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -75,6 +75,7 @@ ui = [
 
 [project.scripts]
 synth-platform = "synth_platform.interfaces.cli.app:main"
+synth-platform-ui = "synth_platform.interfaces.streamlit.launcher:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

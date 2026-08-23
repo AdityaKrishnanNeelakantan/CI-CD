@@ -1,9 +1,9 @@
-# CI/CD Phase 1, 2A, and 2B
+# CI/CD Phase 1, 2A, 2B, and 3
 
 Phase 1 stabilizes the project as an installable Python package and makes CI
 truthful about which layer failed. Phase 2A adds package build verification.
 Phase 2B adds portable twin artifact delivery verification. Deployment is
-intentionally out of scope.
+intentionally out of scope. Phase 3 adds tag-based GitHub Release automation.
 
 ## Local Commands
 
@@ -71,6 +71,17 @@ Build and verify a portable twin delivery:
 python scripts/build_artifact_delivery.py --output-dir artifact-delivery
 ```
 
+Create a release:
+
+```bash
+git tag v3.0.0
+git push origin v3.0.0
+```
+
+Tag pushes matching `v*` run `.github/workflows/release.yml`. The release
+workflow builds package distributions, verifies the wheel, builds a portable
+twin delivery, creates checksums, and publishes a GitHub Release.
+
 ## CI Jobs
 
 - `package-smoke`: validates packaging, editable install, imports, compile, and
@@ -87,9 +98,12 @@ python scripts/build_artifact_delivery.py --output-dir artifact-delivery
 - `artifact-delivery`: trains a small portable twin, deletes the source
   database, generates synthetic tables from the artifact only, validates the
   result, checks source canaries do not leak, and uploads the delivery bundle.
+- `release`: runs on version tags, builds verified package artifacts and a
+  portable twin delivery archive, generates checksums, and publishes a GitHub
+  Release.
 
 ## Current Boundaries
 
 These phases do not deploy Streamlit, publish packages, build Docker images,
-create an artifact registry, or automate releases. Those belong to later phases
-after the package and CI quality gates are stable.
+or create an artifact registry. Those belong to later phases after the package
+and CI quality gates are stable.

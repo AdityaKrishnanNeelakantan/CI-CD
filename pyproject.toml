@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-platform"
-version = "3.0.0"
+version = "3.0.1"
 description = "Unified synthetic-data intelligence platform for schema, database, and document twin workflows"
 requires-python = ">=3.11"
 readme = "README.md"

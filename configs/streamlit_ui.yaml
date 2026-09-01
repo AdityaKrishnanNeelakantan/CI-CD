@@ -1,0 +1,264 @@
+app:
+  page_title: Synthetic Data Twin Platform
+  page_icon: ":material/data_object:"
+  layout: wide
+  intro: One synthetic-data platform - multiple SSOT input workflows
+  nav:
+    Platform:
+      - key: home
+        file: home.py
+        title: Home
+        icon: ":material/home:"
+        default: true
+    Create:
+      - key: schema
+        file: schema_twin.py
+        title: Schema Mode
+        icon: ":material/schema:"
+      - key: database
+        file: database_twin.py
+        title: Database Twin
+        icon: ":material/database:"
+      - key: pdf
+        file: pdf_twin.py
+        title: PDF Twin
+        icon: ":material/description:"
+      - key: transcript
+        file: transcript_twin.py
+        title: Customer Interactions Twin
+        icon: ":material/support_agent:"
+
+home:
+  title: Synthetic Data Twin Platform
+  chooser_heading: What would you like to create?
+  chooser_copy: One platform. Multiple SSOT input paths. Pick the source type you have.
+  workflows:
+    - key: schema
+      title: Schema Mode
+      body: Create synthetic data from structure alone.
+      caption: SQL DDL -> review -> set row counts -> generate -> validate -> download
+      page: schema_twin.py
+      link_label: Open Schema Mode
+      icon: ":material/schema:"
+    - key: database
+      title: Database Twin
+      body: Train a portable ML twin from an existing database.
+      caption: Connect -> profile -> train ML twin -> disconnect -> generate -> validate -> export
+      page: database_twin.py
+      link_label: Open Database Twin
+      icon: ":material/database:"
+    - key: pdf
+      title: PDF Twin
+      body: Create synthetic documents while preserving useful document structure.
+      caption: Upload -> understand -> generate -> validate -> download
+      page: pdf_twin.py
+      link_label: Open PDF Twin
+      icon: ":material/description:"
+    - key: transcript
+      title: Customer Interactions Twin
+      body: Create synthetic customer conversations from real interaction examples.
+      caption: Paste/upload -> preview -> build twin -> create interactions -> validate
+      page: transcript_twin.py
+      link_label: Open Customer Interactions Twin
+      icon: ":material/support_agent:"
+  controls_heading: Shared platform controls
+  controls:
+    - label: SSOT paths
+      value: "4"
+    - label: Output volume
+      value: user-controlled
+    - label: Validation
+      value: common evidence
+    - label: Privacy
+      value: tested safeguards
+  technical_details: >
+    Shared stages behind every input path: discovery, understanding, canonical
+    contract, entity/dependency representation, generation, validation, and
+    export. Database Mode adds visible ML model training evidence; Schema and
+    Database modes expose requested output-volume controls; Customer
+    Interactions Twin uses sanitized preview plus hash-based non-replay
+    validation.
+
+schema:
+  title: Schema Mode
+  caption: You have the structure of the data you need - generate synthetic relational data without production records.
+  default_intent: Development & testing
+  intent_options:
+    - Development & testing
+    - QA / automated tests
+    - Demonstrations
+    - Data pipeline development
+    - Early project environments
+  locale_options:
+    - en_US
+    - en_GB
+    - en_IN
+    - de_DE
+    - fr_FR
+  export_formats:
+    - csv
+    - parquet
+  steps:
+    intent:
+      title: Intent
+      what: Records the business purpose for this run. It does not change policy or generation unless a configured backend policy says so.
+      next: Upload a schema file.
+    provide_schema:
+      title: Provide schema
+      what: Upload SQL DDL containing CREATE TABLE statements, fields, keys, defaults, constraints, and explicit PK/FK relationships.
+      next: Review the detected structure.
+    review_schema:
+      title: Review schema
+      help: Confirm tables, keys, and relationships before generating.
+      what: This is the parsed structure the twin will follow.
+      next: Configure table counts and seed.
+    configure_generation:
+      title: Configure generation
+      what: Choose how much data to create and how to reproduce it.
+      next: Generate.
+    generate:
+      title: Generate
+      what: Create the synthetic relational dataset from the schema.
+      next: Preview and validate.
+    preview:
+      title: Preview
+      caption: Your synthetic dataset is ready to preview.
+    validate:
+      title: Validate
+    download:
+      title: Download
+
+database:
+  title: Database Twin
+  caption: Learn from an existing database, download a portable trained twin, disconnect the source, then generate and validate synthetic data from the artifact alone.
+  default_intent: Development & testing
+  intent_options:
+    - Development & testing
+    - QA / automated tests
+    - Demonstrations
+    - Analytics prototyping
+    - Safe sharing with partners
+  source_options:
+    - Use a generated sample database
+    - Upload a SQLite file
+  model_type_labels:
+    safe_gaussian_copula: Standard ML twin
+    dp_gaussian_copula: ML twin with differential privacy
+    sdv_gaussian_copula: SDV Gaussian copula
+  steps:
+    intent:
+      title: Intent
+      what: Records the business purpose for this run. It does not change policy or generation unless a configured backend policy says so.
+      next: Connect a SQLite source database.
+    connect:
+      title: Connect
+      what: Provide a SQLite database to learn from (upload or generate a sample).
+      next: Discover tables and relationships.
+    discover:
+      title: Discover
+      what: Inspect tables, columns, primary keys, and foreign keys.
+      next: Understand values and meaning.
+    profile:
+      title: Understand values
+      what: Learn safe shape statistics (missingness, cardinality, distributions).
+      next: Approve how each column should be treated.
+    understand:
+      title: Understand data
+      what: Review column meanings, then approve the understanding used for training.
+      next: Train the twin.
+    train:
+      title: Train twin
+      what: Train or retrain a portable ML twin from the approved database understanding.
+      next: Download the trained twin artifact.
+    download_twin:
+      title: Download trained twin
+      what: Package the trained twin as a portable artifact you can move without the source.
+      next: Disconnect the source database.
+    disconnect:
+      title: Disconnect source
+      what: Stop using the source so generation runs from the trained twin only.
+      next: Generate synthetic data from the artifact.
+    generate:
+      title: Generate
+      what: Create synthetic tables from the portable artifact. Tune category mixes if needed.
+      next: Validate integrity and quality.
+    validate:
+      title: Validate
+      what: Confirm relational integrity and available quality signals.
+      next: Export the synthetic database.
+    export:
+      title: Export
+      what: Write the synthetic database and download it.
+      next: Done - you have a validated synthetic database.
+
+pdf:
+  title: PDF Twin
+  caption: Upload a document and create a synthetic view that preserves useful document structure. Fields are replaced with generated values.
+  default_intent: Document testing
+  default_extraction_engine: Advanced document extraction
+  intent_options:
+    - Document testing
+    - QA / automation
+    - Demonstrations
+    - Privacy-safe sharing
+  extraction_options:
+    - Advanced document extraction
+    - Automatic (native/OCR)
+  steps:
+    intent:
+      title: Intent
+      what: Records the business purpose for this run. It does not change policy or generation unless a configured backend policy says so.
+      next: Upload a PDF.
+    upload:
+      title: Upload
+      what: Provide the source PDF to twin.
+      next: Discover document structure.
+    discover:
+      title: Discover document
+      what: Process the PDF so the platform can understand its structure.
+      next: Build the twin template.
+    template:
+      title: Build twin template
+      what: Capture structure and labels for the twin (sensitive values stay redacted).
+      next: Understand fields, then generate values.
+    redacted:
+      what: Download a redacted copy without generating a synthetic twin.
+    understand:
+      title: Understand fields
+      what: Map labels to semantic roles and entity paths so generation can stay realistic and consistent.
+      next: Generate synthetic values.
+    generate:
+      title: Generate synthetic values
+      what: Create AI-generated replacement values matched to each field's meaning. Shared entity/database values should be used when provided.
+      next: Build and download the twin PDF.
+    render_validate:
+      title: Build twin document and validate
+      what: Render the synthetic PDF, then check field match and layout fit.
+      next: Download the twin when validation looks good.
+
+transcript:
+  title: Customer Interactions Twin
+  caption: Create synthetic customer interactions from a real conversation example.
+  steps:
+    add:
+      title: Add customer interaction
+      what: Upload a TXT/LOG file or paste a customer conversation.
+      next: Review the safe preview.
+    preview:
+      title: Preview
+    contract:
+      title: Build twin contract
+      what: Turn the interaction into a reusable twin contract. Raw interaction text is dropped after this step.
+      next: Create synthetic customer interactions.
+    generate:
+      title: Create customer conversation
+      what: Choose how many messages you want in the new conversation.
+      next: Check the conversation before downloading.
+    validate:
+      title: Validate interaction
+      what: Check that the synthetic interaction does not replay the source.
+      next: Download the finished twin.
+    download:
+      title: Download twin
+      what: Review the generated twin, then download it as a ZIP.
+      next: Done.

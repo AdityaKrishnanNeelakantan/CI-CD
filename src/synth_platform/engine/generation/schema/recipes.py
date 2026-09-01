@@ -1,0 +1,83 @@
+"""
+Recipe models and helpers for repeatable MVP runs.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import yaml
+from pydantic import BaseModel, Field, model_validator
+
+from synth_platform.engine.inference.schema.schema import SchemaConfig
+
+
+class RecipeSpec(BaseModel):
+    """Minimal recipe wrapper around existing generation inputs."""
+
+    name: str
+    schema_config: Dict[str, Any]
+    seed: Optional[int] = None
+    output_dir: str = "./generated_data"
+    db_url: Optional[str] = None
+    validation: bool = False
+    quality: bool = False
+    audit: bool = False
+
+    @model_validator(mode="after")
+    def validate_inputs(self) -> "RecipeSpec":
+        if not self.schema_config:
+            raise ValueError("Recipe must include 'schema_config'.")
+        return self
+
+    def to_schema_config(self) -> SchemaConfig:
+        """Parse the embedded schema config."""
+        return SchemaConfig(**self.schema_config)
+
+
+class RecipeManifest(BaseModel):  # renamed from RunManifest during Phase 7 consolidation to avoid a name collision with the Database Twin run-manifest type (unrelated class, same name - see TECHNICAL_DEBT.md H1)
+    """Machine-readable metadata for a recipe run."""
+
+    recipe_name: str
+    mvp_version: str
+    status: str
+    started_at: str
+    completed_at: Optional[str] = None
+    seed: Optional[int] = None
+    output_dir: str
+    db_url: Optional[str] = None
+    tables: Dict[str, int] = Field(default_factory=dict)
+    total_rows: int = 0
+    artifacts: Dict[str, str] = Field(default_factory=dict)
+    error: Optional[str] = None
+
+
+def load_recipe(path: str | Path) -> RecipeSpec:
+    """Load a YAML or JSON recipe file."""
+    recipe_path = Path(path)
+    content = recipe_path.read_text(encoding="utf-8")
+    if recipe_path.suffix.lower() == ".json":
+        data = json.loads(content)
+    else:
+        data = yaml.safe_load(content)
+    return RecipeSpec(**(data or {}))
+
+
+def save_recipe(recipe: RecipeSpec, path: str | Path) -> Path:
+    """Save a recipe as YAML."""
+    recipe_path = Path(path)
+    recipe_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = recipe.model_dump(exclude_none=True)
+    recipe_path.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=False),
+        encoding="utf-8",
+    )
+    return recipe_path
+
+
+def utc_now() -> str:
+    """Return a stable UTC timestamp string."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

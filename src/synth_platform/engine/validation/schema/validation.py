@@ -1,0 +1,1166 @@
+"""
+Data validation layer for pre-generation schema checks and post-generation quality checks.
+
+Pre-generation: validate_schema() catches mis-configured SchemaConfig objects before any
+data is written, surfacing every problem in one human-readable error instead of a raw
+Pydantic stack trace or a mid-generation crash.
+
+Post-generation: DataValidator / StreamingDataValidator check referential integrity,
+distribution plausibility, and exact outcome-curve targets after data is produced.
+"""
+
+from collections import defaultdict
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+
+# ---------------------------------------------------------------------------
+# Pre-generation schema validation
+# ---------------------------------------------------------------------------
+
+class SchemaValidationError(Exception):
+    """Raised when a SchemaConfig fails pre-generation checks.
+
+    Reports every problem at once so users can fix them all in one go
+    rather than discovering them one by one during generation.
+
+    Inherits from the mvp exception hierarchy when available; falls back
+    to plain Exception so this module stays importable in isolation.
+    """
+
+    def __init__(self, issues: List[str]) -> None:
+        self.issues = issues
+        bullet_list = "\n".join(f"  • {issue}" for issue in issues)
+        super().__init__(f"Schema has {len(issues)} issue(s):\n{bullet_list}")
+
+
+# Slot SchemaValidationError into the mvp exception hierarchy at import time.
+# Done lazily so mvp.validation stays importable even if mvp.exceptions
+# hasn't been loaded yet (e.g. during isolated unit tests).
+try:
+    from synth_platform.engine.generation.schema.exceptions import SchemaError as _SchemaError
+
+    class SchemaValidationError(SchemaValidationError, _SchemaError):  # type: ignore[no-redef]
+        def __init__(self, issues: List[str]) -> None:
+            self.issues = issues
+            bullet_list = "\n".join(f"  • {issue}" for issue in issues)
+            msg = f"Schema has {len(issues)} issue(s):\n{bullet_list}"
+            # Set attributes MVPError.__str__ expects so str() works correctly.
+            self.message = msg
+            self.details: dict = {}
+            Exception.__init__(self, msg)
+
+        def __str__(self) -> str:
+            return self.args[0]
+
+except ImportError:
+    pass
+
+
+def validate_schema(schema: Any) -> None:
+    """Validate a SchemaConfig before generation starts.
+
+    Checks structural correctness and semantic consistency that Pydantic's
+    field-level validators cannot catch (e.g. cross-field constraints, graph
+    cycles, probability sums).
+
+    Raises:
+        SchemaValidationError: if any issues are found (all issues reported at once).
+    """
+    issues: List[str] = []
+    table_names = {t.name for t in schema.tables}
+    column_map: Dict[str, set] = {
+        t.name: {c.name for c in schema.get_columns(t.name)}
+        for t in schema.tables
+    }
+
+    # 1. Duplicate table names
+    seen_table_names: set = set()
+    for t in schema.tables:
+        if t.name in seen_table_names:
+            issues.append(f"Duplicate table name: '{t.name}'")
+        seen_table_names.add(t.name)
+
+    # 2. FK columns must have a backing Relationship
+    rel_child_keys = {
+        (r.child_table, r.child_key) for r in schema.relationships
+    }
+    for t in schema.tables:
+        for col in schema.get_columns(t.name):
+            if col.type == "foreign_key" and (t.name, col.name) not in rel_child_keys:
+                # Suggest a likely parent: column name minus '_id', or a table sharing the column
+                hint_parent = col.name[:-3] if col.name.endswith("_id") else "<parent_table>"
+                if hint_parent not in table_names:
+                    candidates = [tn for tn in table_names if tn != t.name and col.name in column_map[tn]]
+                    hint_parent = candidates[0] if candidates else "<parent_table>"
+                issues.append(
+                    f"Column '{t.name}.{col.name}' is type 'foreign_key' but has no matching "
+                    f"Relationship.\n      Fix: add Relationship(parent_table='{hint_parent}', "
+                    f"child_table='{t.name}', parent_key='{col.name}', child_key='{col.name}') "
+                    f"to schema.relationships"
+                )
+
+    # 4. Categorical probabilities must sum to ~1.0
+    for t in schema.tables:
+        for col in schema.get_columns(t.name):
+            probs = col.distribution_params.get("probabilities")
+            choices = col.distribution_params.get("choices")
+            if probs is not None and choices is not None:
+                total = sum(probs)
+                if abs(total - 1.0) > 0.02:
+                    factor = 1.0 / total if total > 0 else 1.0
+                    diff = total - 1.0
+                    direction = "scale all values down" if diff > 0 else "scale all values up"
+                    issues.append(
+                        f"Column '{t.name}.{col.name}' probabilities sum to {total:.4f} "
+                        f"(expected 1.0 ± 0.02).\n      Fix: {direction} by ×{factor:.4f}, "
+                        f"or adjust one value by {-diff:+.4f}"
+                    )
+                if len(probs) != len(choices):
+                    short, long = (probs, choices) if len(probs) < len(choices) else (choices, probs)
+                    short_name = "probabilities" if short is probs else "choices"
+                    issues.append(
+                        f"Column '{t.name}.{col.name}' has {len(choices)} choices but "
+                        f"{len(probs)} probabilities — lengths must match.\n      "
+                        f"Fix: add {len(long) - len(short)} more {short_name} entries"
+                    )
+
+    # 5. Outcome curves must reference existing tables and columns
+    _date_types = {"date", "datetime"}
+    for curve in getattr(schema, "outcome_curves", []):
+        if curve.table not in table_names:
+            available = ", ".join(sorted(table_names)) or "<none>"
+            issues.append(
+                f"OutcomeCurve references unknown table '{curve.table}'.\n      "
+                f"Fix: known tables are: {available}"
+            )
+            continue
+        cols = column_map[curve.table]
+        col_types = {c.name: c.type for c in schema.get_columns(curve.table)}
+        if curve.column not in cols:
+            available = ", ".join(sorted(cols)) or "<none>"
+            issues.append(
+                f"OutcomeCurve references unknown column '{curve.table}.{curve.column}'."
+                f"\n      Fix: columns in '{curve.table}': {available}"
+            )
+        if curve.time_column:
+            if curve.time_column not in cols:
+                date_cols = [n for n, ty in col_types.items() if ty in _date_types]
+                hint = ", ".join(date_cols) if date_cols else "<add a date or datetime column>"
+                issues.append(
+                    f"OutcomeCurve references unknown time_column "
+                    f"'{curve.table}.{curve.time_column}'.\n      "
+                    f"Fix: date/datetime columns in '{curve.table}': {hint}"
+                )
+            elif col_types.get(curve.time_column) not in _date_types:
+                issues.append(
+                    f"OutcomeCurve time_column '{curve.table}.{curve.time_column}' has type "
+                    f"'{col_types.get(curve.time_column)}' — must be 'date' or 'datetime'.\n      "
+                    f"Fix: change column type to 'date' or 'datetime', or pick a different time_column"
+                )
+
+    # 6. Events must reference existing tables and columns
+    for event in getattr(schema, "events", []):
+        ev_name = getattr(event, "name", "?")
+        if event.table not in table_names:
+            available = ", ".join(sorted(table_names)) or "<none>"
+            issues.append(
+                f"ScenarioEvent '{ev_name}' references unknown table '{event.table}'.\n      "
+                f"Fix: known tables are: {available}"
+            )
+            continue
+        if event.column not in column_map[event.table]:
+            available = ", ".join(sorted(column_map[event.table])) or "<none>"
+            issues.append(
+                f"ScenarioEvent '{ev_name}' references unknown column "
+                f"'{event.table}.{event.column}'.\n      "
+                f"Fix: columns in '{event.table}': {available}"
+            )
+
+    # 7. Detect cycles in the relationship graph (topological sort check)
+    # Build adjacency: parent → children
+    adj: Dict[str, List[str]] = {t.name: [] for t in schema.tables}
+    for r in schema.relationships:
+        if r.parent_table in adj:
+            adj[r.parent_table].append(r.child_table)
+
+    visited: set = set()
+    cycle_path: List[str] = []
+
+    def _find_cycle(node: str, stack: List[str]) -> bool:
+        visited.add(node)
+        stack.append(node)
+        for neighbour in adj.get(node, []):
+            if neighbour in stack:
+                cycle_path.extend(stack[stack.index(neighbour):] + [neighbour])
+                return True
+            if neighbour not in visited and _find_cycle(neighbour, stack):
+                return True
+        stack.pop()
+        return False
+
+    for table_name in list(adj.keys()):
+        if table_name not in visited:
+            if _find_cycle(table_name, []):
+                cycle_str = " → ".join(cycle_path) if cycle_path else "(unknown)"
+                issues.append(
+                    f"Circular relationship detected: {cycle_str}.\n      "
+                    f"Fix: remove one relationship in the cycle, or convert one of "
+                    f"the tables to a reference table (is_reference=True)"
+                )
+                break  # one message is enough
+
+    if issues:
+        raise SchemaValidationError(issues)
+
+import numpy as np
+import pandas as pd
+
+from synth_platform.engine.generation.schema.engines import FactEngine
+from synth_platform.engine.generation.schema.datetime_utils import looks_like_date_series
+from synth_platform.engine.validation.schema.format_checks import invalid_typed_mask, schema_column_type_map
+
+# Backward-compatible alias used by quality/reporting modules.
+_banking_invalid_mask = invalid_typed_mask
+
+
+class Severity(Enum):
+    """Validation issue severity levels."""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+@dataclass
+class ValidationIssue:
+    """A single validation issue found in the data."""
+    severity: Severity
+    table: str
+    column: Optional[str]
+    message: str
+    affected_rows: int = 0
+    sample_values: List[Any] = field(default_factory=list)
+
+    def __str__(self):
+        severity_icon = {"info": "ℹ️", "warning": "⚠️", "error": "❌"}[self.severity.value]
+        col = f".{self.column}" if self.column else ""
+        return f"{severity_icon} [{self.table}{col}] {self.message} ({self.affected_rows} rows)"
+
+
+@dataclass
+class ValidationReport:
+    """Complete validation report for generated data."""
+    issues: List[ValidationIssue] = field(default_factory=list)
+    tables_checked: int = 0
+    columns_checked: int = 0
+    total_rows: int = 0
+
+    @property
+    def has_errors(self) -> bool:
+        return any(i.severity == Severity.ERROR for i in self.issues)
+
+    @property
+    def has_warnings(self) -> bool:
+        return any(i.severity == Severity.WARNING for i in self.issues)
+
+    @property
+    def is_clean(self) -> bool:
+        return len(self.issues) == 0
+
+    def summary(self) -> str:
+        """Get a summary of the validation report."""
+        errors = sum(1 for i in self.issues if i.severity == Severity.ERROR)
+        warnings = sum(1 for i in self.issues if i.severity == Severity.WARNING)
+        info = sum(1 for i in self.issues if i.severity == Severity.INFO)
+
+        lines = [
+            "=" * 50,
+            "DATA VALIDATION REPORT",
+            "=" * 50,
+            f"Tables checked: {self.tables_checked}",
+            f"Columns checked: {self.columns_checked}",
+            f"Total rows: {self.total_rows:,}",
+            "-" * 50,
+            f"❌ Errors: {errors}",
+            f"⚠️ Warnings: {warnings}",
+            f"ℹ️ Info: {info}",
+            "-" * 50,
+        ]
+
+        if self.is_clean:
+            lines.append("✅ All validations passed!")
+        else:
+            lines.append("Issues found:")
+            for issue in self.issues:
+                lines.append(f"  {issue}")
+
+        lines.append("=" * 50)
+        return "\n".join(lines)
+
+
+class DataValidator:
+    """
+    Validates generated data for quality and accuracy.
+    """
+
+    def __init__(
+        self,
+        tables: Dict[str, pd.DataFrame],
+        schema_config: Optional[Any] = None,
+    ):
+        """
+        Initialize validator with generated tables.
+
+        Args:
+            tables: Dict mapping table name to DataFrame
+            schema_config: Optional schema config for relationship checking
+        """
+        self.tables = tables
+        self.schema_config = schema_config
+        self.issues: List[ValidationIssue] = []
+        self._column_types = schema_column_type_map(schema_config)
+
+    def validate_all(self) -> ValidationReport:
+        """
+        Run all validation checks.
+
+        Returns:
+            Complete validation report
+        """
+        self.issues = []
+
+        for table_name, df in self.tables.items():
+            self._validate_table(table_name, df)
+
+        # Validate referential integrity
+        self._validate_referential_integrity()
+        self._validate_outcome_curves()
+
+        return ValidationReport(
+            issues=self.issues,
+            tables_checked=len(self.tables),
+            columns_checked=sum(len(df.columns) for df in self.tables.values()),
+            total_rows=sum(len(df) for df in self.tables.values()),
+        )
+
+    def _validate_table(self, table_name: str, df: pd.DataFrame) -> None:
+        """Validate a single table."""
+        for col in df.columns:
+            self._validate_column(table_name, df, col)
+
+        self._validate_duplicates(table_name, df)
+
+    def _validate_duplicates(self, table_name: str, df: pd.DataFrame) -> None:
+        """Validate hard duplicate constraints generically.
+
+        Exact duplicate rows and duplicate values in unique/protected columns
+        are export-blocking errors.  Non-key repetition is handled as advisory
+        quality feedback in ``mvp.quality``.
+        """
+        if self.schema_config is None:
+            duplicate_count = int(df.duplicated(keep="first").sum())
+            if duplicate_count > 0:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    table=table_name,
+                    column=None,
+                    message=f"Contains {duplicate_count} exact duplicate rows",
+                    affected_rows=duplicate_count,
+                ))
+            return
+
+        try:
+            from synth_platform.engine.generation.schema.duplicate_guard import duplicate_validation_records
+
+            records = duplicate_validation_records({table_name: df}, self.schema_config)
+        except Exception:
+            # Validation should never crash because duplicate metadata inspection failed.
+            records = []
+
+        for record in records:
+            self.issues.append(ValidationIssue(
+                severity=Severity.ERROR,
+                table=record.get("table", table_name),
+                column=record.get("column"),
+                message=record.get("message", "Duplicate validation issue"),
+                affected_rows=int(record.get("affected_rows", 0) or 0),
+                sample_values=list(record.get("sample_values", []) or []),
+            ))
+
+    def _validate_column(self, table_name: str, df: pd.DataFrame, col: str) -> None:
+        """Validate a single column."""
+        col.lower()
+        values = df[col]
+
+        # Check for nulls
+        null_count = values.isna().sum()
+        if null_count > 0:
+            self.issues.append(ValidationIssue(
+                severity=Severity.INFO,
+                table=table_name,
+                column=col,
+                message=f"Contains {null_count} null values",
+                affected_rows=null_count,
+            ))
+
+        # Numeric column checks
+        if pd.api.types.is_numeric_dtype(values):
+            self._validate_numeric_column(table_name, col, values)
+
+        # Date column checks
+        if pd.api.types.is_datetime64_any_dtype(values):
+            self._validate_date_column(table_name, col, values)
+
+        # String column checks
+        if pd.api.types.is_string_dtype(values) or pd.api.types.is_object_dtype(values):
+            self._validate_string_column(table_name, col, values)
+
+    def _validate_numeric_column(self, table_name: str, col: str, values: pd.Series) -> None:
+        """Validate numeric columns."""
+        col_lower = col.lower()
+
+        # Check for negative values in columns that should be positive
+        positive_patterns = ['price', 'cost', 'amount', 'age', 'quantity', 'count',
+                             'duration', 'weight', 'height', 'salary', 'revenue']
+
+        if any(p in col_lower for p in positive_patterns):
+            negative_count = (values < 0).sum()
+            if negative_count > 0:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    table=table_name,
+                    column=col,
+                    message=f"Contains {negative_count} negative values (should be positive)",
+                    affected_rows=negative_count,
+                    sample_values=values[values < 0].head(5).tolist(),
+                ))
+
+        # Check for unreasonable ages
+        if 'age' in col_lower:
+            invalid_ages = ((values < 0) | (values > 150)).sum()
+            if invalid_ages > 0:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.WARNING,
+                    table=table_name,
+                    column=col,
+                    message=f"Contains {invalid_ages} unrealistic age values (< 0 or > 150)",
+                    affected_rows=invalid_ages,
+                ))
+
+        # Check for unreasonable prices
+        if 'price' in col_lower or 'cost' in col_lower:
+            very_high = (values > 1000000).sum()
+            if very_high > 0:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.INFO,
+                    table=table_name,
+                    column=col,
+                    message=f"Contains {very_high} values over $1M",
+                    affected_rows=very_high,
+                ))
+
+    def _validate_date_column(self, table_name: str, col: str, values: pd.Series) -> None:
+        """Validate date columns."""
+        # Check for dates too far in the future
+        future_cutoff = pd.Timestamp.now() + pd.Timedelta(365 * 5, unit="D")
+        far_future = (values > future_cutoff).sum()
+        if far_future > 0:
+            self.issues.append(ValidationIssue(
+                severity=Severity.WARNING,
+                table=table_name,
+                column=col,
+                message=f"Contains {far_future} dates more than 5 years in the future",
+                affected_rows=far_future,
+            ))
+
+        # Check for dates too far in the past
+        past_cutoff = pd.Timestamp('1900-01-01')
+        far_past = (values < past_cutoff).sum()
+        if far_past > 0:
+            self.issues.append(ValidationIssue(
+                severity=Severity.ERROR,
+                table=table_name,
+                column=col,
+                message=f"Contains {far_past} dates before 1900",
+                affected_rows=far_past,
+            ))
+
+    def _validate_string_column(self, table_name: str, col: str, values: pd.Series) -> None:
+        """Validate string columns."""
+        col_lower = col.lower()
+
+        # Check for email format
+        if 'email' in col_lower:
+            # Simple email check - contains @
+            invalid_emails = (~values.astype(str).str.contains('@', na=False)).sum()
+            if invalid_emails > 0:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    table=table_name,
+                    column=col,
+                    message=f"Contains {invalid_emails} invalid email addresses",
+                    affected_rows=invalid_emails,
+                ))
+
+        column_type = self._column_types.get((table_name, col))
+        invalid_typed = invalid_typed_mask(col, values, column_type=column_type)
+        if invalid_typed is not None:
+            invalid_count = int(invalid_typed.sum())
+            if invalid_count > 0:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    table=table_name,
+                    column=col,
+                    message=f"Contains {invalid_count} invalid typed-format values",
+                    affected_rows=invalid_count,
+                    sample_values=values[invalid_typed].head(5).tolist(),
+                ))
+
+        # Check for empty strings
+        empty_count = (values.astype(str).str.strip() == '').sum()
+        if empty_count > 0:
+            self.issues.append(ValidationIssue(
+                severity=Severity.WARNING,
+                table=table_name,
+                column=col,
+                message=f"Contains {empty_count} empty strings",
+                affected_rows=empty_count,
+            ))
+
+    def _validate_referential_integrity(self) -> None:
+        """Validate foreign key relationships."""
+        if not self.schema_config:
+            return
+
+        for rel in self.schema_config.relationships:
+            if rel.parent_table not in self.tables or rel.child_table not in self.tables:
+                continue
+
+            parent_df = self.tables[rel.parent_table]
+            child_df = self.tables[rel.child_table]
+
+            if rel.parent_key not in parent_df.columns or rel.child_key not in child_df.columns:
+                continue
+
+            parent_ids = set(parent_df[rel.parent_key].dropna())
+            child_fks = child_df[rel.child_key].dropna()
+
+            orphans = ~child_fks.isin(parent_ids)
+            orphan_count = orphans.sum()
+
+            if orphan_count > 0:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    table=rel.child_table,
+                    column=rel.child_key,
+                    message=f"Contains {orphan_count} orphan references (FK not found in {rel.parent_table})",
+                    affected_rows=orphan_count,
+                ))
+
+    def _validate_outcome_curves(self) -> None:
+        """Validate exact outcome curves against generated aggregates."""
+        if not self.schema_config or not getattr(self.schema_config, "outcome_curves", None):
+            return
+
+        engine = FactEngine()
+
+        for table in self.schema_config.tables:
+            table_name = table.name
+            if table_name not in self.tables:
+                continue
+
+            curves = [
+                curve
+                for curve in self.schema_config.outcome_curves
+                if getattr(curve, "table", None) == table_name
+                and engine.curve_has_exact_targets(curve)
+            ]
+            if not curves:
+                continue
+
+            plan = engine.build_plan(table, self.schema_config.get_columns(table_name), curves)
+            if plan is None:
+                continue
+
+            df = self.tables[table_name]
+            if plan.time_column not in df.columns:
+                self.issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    table=table_name,
+                    column=plan.time_column,
+                    message="Missing time column required for outcome curve validation",
+                    affected_rows=len(df),
+                ))
+                continue
+
+            timestamps = pd.to_datetime(df[plan.time_column], errors="coerce")
+            for curve in plan.curves:
+                if curve.column not in df.columns:
+                    self.issues.append(ValidationIssue(
+                        severity=Severity.ERROR,
+                        table=table_name,
+                        column=curve.column,
+                        message="Missing constrained column required for outcome curve validation",
+                        affected_rows=len(df),
+                    ))
+                    continue
+
+                actual_values: List[float] = []
+                numeric_series = pd.to_numeric(df[curve.column], errors="coerce").fillna(0)
+
+                for bucket in plan.buckets:
+                    mask = (timestamps >= bucket.start) & (timestamps < bucket.end)
+                    actual_values.append(float(numeric_series.loc[mask].sum()))
+
+                tolerance = 0.01 if self._column_decimals(table_name, curve.column) else 0.0
+                mismatches = [
+                    (expected, actual)
+                    for expected, actual in zip(curve.targets, actual_values)
+                    if abs(expected - actual) > tolerance
+                ]
+                if mismatches:
+                    sample_expected, sample_actual = mismatches[0]
+                    self.issues.append(ValidationIssue(
+                        severity=Severity.ERROR,
+                        table=table_name,
+                        column=curve.column,
+                        message=(
+                            "Outcome curve aggregate mismatch. "
+                            f"Expected {sample_expected:.2f}, got {sample_actual:.2f} in at least one bucket"
+                        ),
+                        affected_rows=len(mismatches),
+                    ))
+
+    def _column_decimals(self, table_name: str, column_name: str) -> int:
+        """Get numeric precision for a schema column."""
+        if not self.schema_config:
+            return 2
+
+        for column in self.schema_config.get_columns(table_name):
+            if column.name != column_name:
+                continue
+            if column.type == "int":
+                return 0
+            return int(column.distribution_params.get("decimals", 2))
+
+        return 2
+
+
+def validate_csv(
+    path_or_df,
+    schema=None,
+    table_name: Optional[str] = None,
+) -> "CsvValidationReport":
+    """Profile a CSV file (or DataFrame) and optionally check it against a schema.
+
+    Args:
+        path_or_df:  Path to a CSV file or an existing ``pd.DataFrame``.
+        schema:      Optional ``SchemaConfig`` to check the CSV against.
+                     If not provided, MVP will infer types and report stats only.
+        table_name:  Name to use when looking up columns in ``schema``.
+                     Defaults to the CSV filename stem.
+
+    Returns:
+        ``CsvValidationReport`` with per-column stats, issues, and a quality score.
+
+    Example::
+
+        report = mvp.validate_csv("customers.csv")
+        print(report)
+
+        # With a schema
+        schema = mvp.load_yaml_schema("mvp.yaml")
+        report = mvp.validate_csv("customers.csv", schema=schema)
+        print(report.score)
+    """
+    import pandas as pd
+
+    if isinstance(path_or_df, (str,)) or hasattr(path_or_df, "__fspath__"):
+        from pathlib import Path
+        p = Path(path_or_df)
+        df = pd.read_csv(p)
+        name = table_name or p.stem
+    else:
+        df = path_or_df
+        name = table_name or "data"
+
+    return CsvValidationReport.from_dataframe(df, name=name, schema=schema)
+
+
+class CsvValidationReport:
+    """Per-column profile of a CSV/DataFrame with optional schema conformance check."""
+
+    def __init__(self, name: str, rows: int, columns: list, issues: list, score: int):
+        self.name = name
+        self.rows = rows
+        self.columns = columns  # list of dicts
+        self.issues = issues    # list of str
+        self.score = score      # 0–100
+
+    @classmethod
+    def from_dataframe(cls, df: "pd.DataFrame", name: str, schema=None) -> "CsvValidationReport":
+        import pandas as pd
+
+        cols = []
+        issues = []
+        deductions = 0
+
+        schema_col_map: dict = {}
+        if schema is not None:
+            try:
+                sc_cols = schema.get_columns(name)
+                schema_col_map = {c.name: c for c in sc_cols}
+            except Exception:
+                pass
+
+        for col in df.columns:
+            series = df[col]
+            null_pct = series.isna().mean()
+            n_unique = series.nunique()
+            dtype = str(series.dtype)
+
+            # Infer semantic type
+            if pd.api.types.is_bool_dtype(series):
+                sem = "boolean"
+            elif pd.api.types.is_integer_dtype(series):
+                sem = "int"
+            elif pd.api.types.is_float_dtype(series):
+                sem = "float"
+            else:
+                if looks_like_date_series(series, sample_size=20):
+                    sem = "date"
+                elif n_unique / max(len(df), 1) < 0.2:
+                    sem = "categorical"
+                else:
+                    sem = "text"
+
+            range_str = ""
+            if sem in ("int", "float"):
+                lo, hi = series.min(), series.max()
+                range_str = f"{lo:g} → {hi:g}"
+            elif sem == "categorical":
+                vals = series.dropna().unique()[:4]
+                range_str = ", ".join(str(v) for v in vals)
+                if series.nunique() > 4:
+                    range_str += f" (+{series.nunique()-4} more)"
+            elif sem == "text":
+                range_str = f"{n_unique} unique"
+            elif sem == "date":
+                try:
+                    from synth_platform.engine.generation.schema.datetime_utils import coerce_datetime_series
+
+                    dt = coerce_datetime_series(series.dropna())
+                    range_str = f"{dt.min().date()} → {dt.max().date()}"
+                except Exception:
+                    pass
+
+            notes = []
+            # Uniqueness
+            if n_unique == len(df) and len(df) > 1:
+                notes.append("unique")
+            elif n_unique == 1:
+                notes.append("constant")
+                issues.append(f"{col}: all values are identical")
+                deductions += 5
+
+            # Nulls
+            if null_pct > 0.5:
+                issues.append(f"{col}: {null_pct:.0%} nulls — column may be mostly empty")
+                deductions += 10
+            elif null_pct > 0.0:
+                notes.append(f"{null_pct:.1%} nulls")
+
+            # Schema conformance
+            if col in schema_col_map:
+                sc = schema_col_map[col]
+                expected = sc.type
+                type_ok = (
+                    (expected == "int"   and sem in ("int",)) or
+                    (expected == "float" and sem in ("int", "float")) or
+                    (expected == "text"  and sem in ("text", "categorical", "date")) or
+                    (expected == "categorical" and sem == "categorical") or
+                    (expected == "boolean" and sem in ("boolean", "int")) or
+                    (expected == "date"  and sem == "date")
+                )
+                if not type_ok:
+                    issues.append(f"{col}: schema expects {expected!r} but found {sem!r}")
+                    deductions += 8
+                else:
+                    notes.append(f"schema ✓")
+
+                if sc.unique and n_unique < len(df):
+                    dup = len(df) - n_unique
+                    issues.append(f"{col}: {dup} duplicate values (schema expects unique)")
+                    deductions += 5
+
+            cols.append({
+                "name": col,
+                "type": sem,
+                "dtype": dtype,
+                "nulls": f"{null_pct:.1%}",
+                "range": range_str,
+                "notes": " · ".join(notes),
+            })
+
+        score = max(0, 100 - deductions)
+        return cls(name=name, rows=len(df), columns=cols, issues=issues, score=score)
+
+    def __str__(self) -> str:
+        lines = [
+            f"\nValidating {self.name!r} — {self.rows:,} rows × {len(self.columns)} columns",
+            "─" * 74,
+            f"  {'Column':<22} {'Type':<12} {'Nulls':>6}  {'Range / Values':<28}  Notes",
+            "  " + "─" * 70,
+        ]
+        for c in self.columns:
+            lines.append(
+                f"  {c['name']:<22} {c['type']:<12} {c['nulls']:>6}  {c['range']:<28}  {c['notes']}"
+            )
+        lines.append("  " + "─" * 70)
+        lines.append(f"\n  Quality score: {self.score}/100")
+        if self.issues:
+            lines.append(f"  {len(self.issues)} issue(s) found:")
+            for issue in self.issues:
+                lines.append(f"    · {issue}")
+        else:
+            lines.append("  No issues found.")
+        lines.append("")
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        return f"CsvValidationReport(name={self.name!r}, rows={self.rows}, score={self.score})"
+
+
+def validate_data(
+    tables: Dict[str, pd.DataFrame],
+    schema_config: Optional[Any] = None,
+) -> ValidationReport:
+    """
+    Quick validation of generated data.
+
+    Args:
+        tables: Generated tables
+        schema_config: Optional schema for FK validation
+
+    Returns:
+        Validation report
+    """
+    validator = DataValidator(tables, schema_config)
+    return validator.validate_all()
+
+
+class StreamingDataValidator:
+    """
+    Streaming validator for batch generation paths.
+
+    Keeps exact validation for scalar checks, FK integrity, and exact outcome
+    curves without materializing all tables in memory.
+    """
+
+    POSITIVE_PATTERNS = ['price', 'cost', 'amount', 'age', 'quantity', 'count',
+                         'duration', 'weight', 'height', 'salary', 'revenue']
+
+    def __init__(self, schema_config: Optional[Any] = None):
+        self.schema_config = schema_config
+        self._issue_counts: Dict[tuple[Any, str, Optional[str], str], int] = defaultdict(int)
+        self._issue_samples: Dict[tuple[Any, str, Optional[str], str], List[Any]] = defaultdict(list)
+        self._tables_seen: set[str] = set()
+        self._columns_seen: set[tuple[str, str]] = set()
+        self._total_rows = 0
+        self._parent_ids: Dict[tuple[str, str], set[Any]] = defaultdict(set)
+        self._outcome_plans: Dict[str, Any] = {}
+        self._outcome_actuals: Dict[tuple[str, str], np.ndarray] = {}
+        self._missing_outcome_columns: set[tuple[str, str]] = set()
+        self._column_types = schema_column_type_map(schema_config)
+
+        if self.schema_config:
+            self._initialize_outcome_plans()
+
+    def consume(self, table_name: str, df: pd.DataFrame) -> None:
+        """Consume one generated batch."""
+        self._tables_seen.add(table_name)
+        self._total_rows += len(df)
+        for column in df.columns:
+            self._columns_seen.add((table_name, column))
+            self._validate_column(table_name, column, df[column])
+
+        self._accumulate_parent_ids(table_name, df)
+        self._validate_child_relationships(table_name, df)
+        self._accumulate_outcome_curves(table_name, df)
+
+    def finalize(self) -> ValidationReport:
+        """Build a ValidationReport from all consumed batches."""
+        self._finalize_outcome_curves()
+
+        issues = []
+        for (severity, table_name, column_name, template), count in self._issue_counts.items():
+            message = template.format(count=count)
+            issues.append(
+                ValidationIssue(
+                    severity=severity,
+                    table=table_name,
+                    column=column_name,
+                    message=message,
+                    affected_rows=count,
+                    sample_values=self._issue_samples.get((severity, table_name, column_name, template), [])[:5],
+                )
+            )
+
+        return ValidationReport(
+            issues=issues,
+            tables_checked=len(self._tables_seen),
+            columns_checked=len(self._columns_seen),
+            total_rows=self._total_rows,
+        )
+
+    def _add_issue(
+        self,
+        severity: Severity,
+        table_name: str,
+        column_name: Optional[str],
+        template: str,
+        count: int,
+        sample_values: Optional[List[Any]] = None,
+    ) -> None:
+        if count <= 0:
+            return
+        key = (severity, table_name, column_name, template)
+        self._issue_counts[key] += int(count)
+        if sample_values:
+            existing = self._issue_samples[key]
+            remaining = max(0, 5 - len(existing))
+            if remaining:
+                existing.extend(sample_values[:remaining])
+
+    def _validate_column(self, table_name: str, column_name: str, values: pd.Series) -> None:
+        null_count = int(values.isna().sum())
+        self._add_issue(
+            Severity.INFO,
+            table_name,
+            column_name,
+            "Contains {count} null values",
+            null_count,
+        )
+
+        if pd.api.types.is_numeric_dtype(values):
+            self._validate_numeric_column(table_name, column_name, values)
+
+        if pd.api.types.is_datetime64_any_dtype(values):
+            self._validate_date_column(table_name, column_name, values)
+
+        if pd.api.types.is_string_dtype(values) or pd.api.types.is_object_dtype(values):
+            self._validate_string_column(table_name, column_name, values)
+
+    def _validate_numeric_column(self, table_name: str, column_name: str, values: pd.Series) -> None:
+        column_lower = column_name.lower()
+        if any(pattern in column_lower for pattern in self.POSITIVE_PATTERNS):
+            invalid = values < 0
+            self._add_issue(
+                Severity.ERROR,
+                table_name,
+                column_name,
+                "Contains {count} negative values (should be positive)",
+                int(invalid.sum()),
+                values[invalid].head(5).tolist(),
+            )
+
+        if 'age' in column_lower:
+            invalid_ages = (values < 0) | (values > 150)
+            self._add_issue(
+                Severity.WARNING,
+                table_name,
+                column_name,
+                "Contains {count} unrealistic age values (< 0 or > 150)",
+                int(invalid_ages.sum()),
+            )
+
+        if 'price' in column_lower or 'cost' in column_lower:
+            high_values = values > 1000000
+            self._add_issue(
+                Severity.INFO,
+                table_name,
+                column_name,
+                "Contains {count} values over $1M",
+                int(high_values.sum()),
+            )
+
+    def _validate_date_column(self, table_name: str, column_name: str, values: pd.Series) -> None:
+        future_cutoff = pd.Timestamp.now() + pd.Timedelta(365 * 5, unit="D")
+        past_cutoff = pd.Timestamp('1900-01-01')
+        self._add_issue(
+            Severity.WARNING,
+            table_name,
+            column_name,
+            "Contains {count} dates more than 5 years in the future",
+            int((values > future_cutoff).sum()),
+        )
+        self._add_issue(
+            Severity.ERROR,
+            table_name,
+            column_name,
+            "Contains {count} dates before 1900",
+            int((values < past_cutoff).sum()),
+        )
+
+    def _validate_string_column(self, table_name: str, column_name: str, values: pd.Series) -> None:
+        column_lower = column_name.lower()
+        as_text = values.astype(str)
+
+        if 'email' in column_lower:
+            invalid = ~as_text.str.contains('@', na=False)
+            self._add_issue(
+                Severity.ERROR,
+                table_name,
+                column_name,
+                "Contains {count} invalid email addresses",
+                int(invalid.sum()),
+            )
+
+        column_type = self._column_types.get((table_name, column_name))
+        invalid_typed = invalid_typed_mask(column_name, values, column_type=column_type)
+        if invalid_typed is not None:
+            self._add_issue(
+                Severity.ERROR,
+                table_name,
+                column_name,
+                "Contains {count} invalid typed-format values",
+                int(invalid_typed.sum()),
+                values[invalid_typed].head(5).tolist(),
+            )
+
+        empty = as_text.str.strip() == ''
+        self._add_issue(
+            Severity.WARNING,
+            table_name,
+            column_name,
+            "Contains {count} empty strings",
+            int(empty.sum()),
+        )
+
+    def _accumulate_parent_ids(self, table_name: str, df: pd.DataFrame) -> None:
+        if not self.schema_config:
+            return
+
+        for relationship in self.schema_config.relationships:
+            if relationship.parent_table != table_name or relationship.parent_key not in df.columns:
+                continue
+            self._parent_ids[(relationship.parent_table, relationship.parent_key)].update(df[relationship.parent_key].dropna().tolist())
+
+    def _validate_child_relationships(self, table_name: str, df: pd.DataFrame) -> None:
+        if not self.schema_config:
+            return
+
+        for relationship in self.schema_config.relationships:
+            if relationship.child_table != table_name:
+                continue
+            if relationship.child_key not in df.columns:
+                continue
+
+            parent_ids = self._parent_ids.get((relationship.parent_table, relationship.parent_key), set())
+            child_values = df[relationship.child_key].dropna()
+            orphan_count = int((~child_values.isin(parent_ids)).sum())
+            self._add_issue(
+                Severity.ERROR,
+                relationship.child_table,
+                relationship.child_key,
+                f"Contains {{count}} orphan references (FK not found in {relationship.parent_table})",
+                orphan_count,
+            )
+
+    def _initialize_outcome_plans(self) -> None:
+        if not self.schema_config or not getattr(self.schema_config, "outcome_curves", None):
+            return
+
+        engine = FactEngine()
+        for table in self.schema_config.tables:
+            table_name = table.name
+            curves = [
+                curve
+                for curve in self.schema_config.outcome_curves
+                if getattr(curve, "table", None) == table_name
+                and engine.curve_has_exact_targets(curve)
+            ]
+            if not curves:
+                continue
+            plan = engine.build_plan(table, self.schema_config.get_columns(table_name), curves)
+            if plan is None:
+                continue
+            self._outcome_plans[table_name] = plan
+            for curve in plan.curves:
+                self._outcome_actuals[(table_name, curve.column)] = np.zeros(len(plan.buckets), dtype=float)
+
+    def _accumulate_outcome_curves(self, table_name: str, df: pd.DataFrame) -> None:
+        if table_name not in self._outcome_plans:
+            return
+
+        plan = self._outcome_plans[table_name]
+        if plan.time_column not in df.columns:
+            key = (table_name, plan.time_column)
+            if key not in self._missing_outcome_columns:
+                self._missing_outcome_columns.add(key)
+                self._add_issue(
+                    Severity.ERROR,
+                    table_name,
+                    plan.time_column,
+                    "Missing time column required for outcome curve validation",
+                    len(df),
+                )
+            return
+
+        timestamps = pd.to_datetime(df[plan.time_column], errors="coerce")
+        for curve in plan.curves:
+            if curve.column not in df.columns:
+                key = (table_name, curve.column)
+                if key not in self._missing_outcome_columns:
+                    self._missing_outcome_columns.add(key)
+                    self._add_issue(
+                        Severity.ERROR,
+                        table_name,
+                        curve.column,
+                        "Missing constrained column required for outcome curve validation",
+                        len(df),
+                    )
+                continue
+
+            numeric_values = pd.to_numeric(df[curve.column], errors="coerce").fillna(0)
+            aggregates = self._outcome_actuals[(table_name, curve.column)]
+            for bucket_index, bucket in enumerate(plan.buckets):
+                mask = (timestamps >= bucket.start) & (timestamps < bucket.end)
+                aggregates[bucket_index] += float(numeric_values.loc[mask].sum())
+
+    def _finalize_outcome_curves(self) -> None:
+        for table_name, plan in self._outcome_plans.items():
+            for curve in plan.curves:
+                actual_values = self._outcome_actuals[(table_name, curve.column)]
+                tolerance = 0.01 if self._column_decimals(table_name, curve.column) else 0.0
+                mismatches = [
+                    (expected, actual)
+                    for expected, actual in zip(curve.targets, actual_values)
+                    if abs(expected - actual) > tolerance
+                ]
+                if not mismatches:
+                    continue
+                expected, actual = mismatches[0]
+                self._add_issue(
+                    Severity.ERROR,
+                    table_name,
+                    curve.column,
+                    (
+                        "Outcome curve aggregate mismatch. "
+                        f"Expected {expected:.2f}, got {actual:.2f} in at least one bucket"
+                    ),
+                    len(mismatches),
+                )
+
+    def _column_decimals(self, table_name: str, column_name: str) -> int:
+        if not self.schema_config:
+            return 2
+
+        for column in self.schema_config.get_columns(table_name):
+            if column.name != column_name:
+                continue
+            if column.type == "int":
+                return 0
+            return int(column.distribution_params.get("decimals", 2))
+        return 2

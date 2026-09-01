@@ -1,0 +1,25 @@
+{
+  "name": "schema_twin_minimal",
+  "seed": 42,
+  "tables": {
+    "users": {
+      "rows": 10,
+      "columns": {
+        "user_id": {"type": "int", "unique": true, "min": 1, "max": 1000},
+        "status": {"type": "categorical", "choices": ["active", "inactive"]},
+        "email": {"type": "email"}
+      }
+    },
+    "orders": {
+      "rows": 10,
+      "columns": {
+        "order_id": {"type": "int", "unique": true, "min": 1, "max": 1000},
+        "user_id": {"type": "foreign_key"},
+        "amount": {"type": "float", "min": 1.0, "max": 500.0}
+      }
+    }
+  },
+  "relationships": [
+    "users.user_id -> orders.user_id"
+  ]
+}

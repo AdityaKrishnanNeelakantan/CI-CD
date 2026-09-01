@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  PYTHON_VERSION: "3.11"
+  XDG_CACHE_HOME: ${{ github.workspace }}/.cache
+  PYTHONPYCACHEPREFIX: .pycache-ci
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel build
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Verify wheel installs cleanly
+        run: |
+          python -m venv .venv-wheel
+          .venv-wheel/bin/python -m pip install --upgrade pip
+          WHEEL="$(ls dist/*.whl)"
+          .venv-wheel/bin/python -m pip install "${WHEEL}[ui]"
+          .venv-wheel/bin/python -c "import synth_platform; print(synth_platform.__version__)"
+          .venv-wheel/bin/synth-platform --help
+          python scripts/smoke_streamlit_ui.py --command .venv-wheel/bin/synth-platform-ui
+
+      - name: Install artifact dependencies
+        run: python -m pip install -e ".[schema,database,pdf,parquet]"
+
+      - name: Build portable twin delivery
+        run: python scripts/build_artifact_delivery.py --output-dir artifact-delivery
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cp dist/* release-assets/
+          tar -czf release-assets/synthetic-twin-delivery.tar.gz -C artifact-delivery .
+          shasum -a 256 release-assets/* > release-assets/SHA256SUMS.txt
+
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Release Assets
+
+          This release includes:
+
+          - Python wheel and source distribution.
+          - Portable synthetic twin delivery bundle.
+          - SHA-256 checksums for release assets.
+
+          The portable twin delivery was generated after deleting the source
+          database and passed validation with no source canary leakage.
+          EOF
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}"
+          release-assets/*
+          --title "${GITHUB_REF_NAME}"
+          --notes-file release-notes.md
+          --verify-tag

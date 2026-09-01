@@ -1,0 +1,12 @@
+.cache/
+.pycache-ci/
+.pytest_cache/
+.venv*/
+.artifact-delivery-work/
+artifact-delivery/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.DS_Store

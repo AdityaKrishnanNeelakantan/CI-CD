@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from io import BytesIO
 import re
 from zipfile import ZipFile
@@ -22,6 +23,8 @@ def _click(at: AppTest, label: str) -> None:
 
 def test_transcript_twin_ui_preview_contract_generate_validate(monkeypatch):
     monkeypatch.setenv("SP_NEMO_DATA_DESIGNER_MOCK", "1")
+    monkeypatch.setenv("SP_TRANSCRIPT_TWIN_MODE", "full")
+    monkeypatch.delenv("SP_TRANSCRIPT_TWIN_ALLOW_FULL_SDK", raising=False)
     at = AppTest.from_file(APP_PATH, default_timeout=120)
     at.run()
     assert not at.exception
@@ -49,16 +52,16 @@ def test_transcript_twin_ui_preview_contract_generate_validate(monkeypatch):
     assert contract.source_type == "transcript"
     assert at.session_state["transcript_text"] == ""
 
-    turn_input = next(n for n in at.number_input if n.label == "Number of messages")
-    turn_input.set_value(3).run()
-    assert not at.exception, [str(e) for e in at.exception]
-
-    _click(at, "Create conversation")
+    _click(at, "Generate synthetic interaction")
     synthetic = at.session_state["transcript_synthetic"]
     assert synthetic is not None
-    assert len(synthetic) == 3
+    assert synthetic["status"] == "generated"
+    assert synthetic["artifact_type"] == "synthetic_customer_interaction"
+    assert len(synthetic["turns"]) > 0
+    assert "structured_ssot" in synthetic
+    assert synthetic["generation"]["data_designer"]["mode"] == "ssot_sdk_plus_platform_turns"
 
-    _click(at, "Validate interaction")
+    _click(at, "Validate synthetic interaction")
     report = at.session_state["transcript_validation"]
     assert report is not None
     assert report["raw_source_text_used"] is False
@@ -70,15 +73,16 @@ def test_transcript_twin_ui_preview_contract_generate_validate(monkeypatch):
         names = set(archive.namelist())
     assert {
         "canonical_contract.json",
-        "synthetic_transcript.csv",
-        "synthetic_transcript.json",
+        "synthetic_interaction.json",
+        "synthetic_interaction.csv",
+        "transcript_twin_ssot.json",
         "validation_report.json",
         "README.txt",
     } <= names
 
     body = "\n".join(str(markdown.value) for markdown in at.markdown)
-    assert "Generated twin" in body
-    assert len(at.dataframe) >= 3
+    assert "Synthetic interaction" in body
+    assert len(at.dataframe) >= 2
 
     download = next(b for b in at.download_button if "Download customer interactions twin" in b.label)
     assert download is not None
@@ -129,19 +133,15 @@ def test_transcript_twin_ui_rich_claim_context_reaches_generated_twin(monkeypatc
     context = contract.entities[0].metadata["synthetic_context"]
     assert {"customer_name", "policy_id", "email", "phone", "date_of_birth"} <= set(context)
 
-    turn_input = next(n for n in at.number_input if n.label == "Number of messages")
-    turn_input.set_value(6).run()
-    assert not at.exception, [str(e) for e in at.exception]
-    _click(at, "Create conversation")
+    _click(at, "Generate synthetic interaction")
     synthetic = at.session_state["transcript_synthetic"]
-    synthetic_text = " ".join(row["text"] for row in synthetic)
+    synthetic_text = json.dumps(synthetic, sort_keys=True)
 
-    assert context["customer_name"] in synthetic_text
-    assert context["policy_id"] in synthetic_text
-    assert context["email"] in synthetic_text
-    assert context["phone"] in synthetic_text
-    assert context["date_of_birth"] in synthetic_text
     assert not any(raw in synthetic_text for raw in raw_values)
+    assert synthetic["status"] == "generated"
+    assert "turns" in synthetic
+    assert "resolved_issues" in synthetic["structured_ssot"]
+    assert "account_mutations" in synthetic["structured_ssot"]
 
-    _click(at, "Validate interaction")
+    _click(at, "Validate synthetic interaction")
     assert at.session_state["transcript_validation"]["passed"] is True

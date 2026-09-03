@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
+from importlib import util
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
@@ -11,10 +14,11 @@ import streamlit as st
 from synth_platform.settings import Settings
 from synth_platform.engine.transcripts import (
     build_transcript_contract,
-    summarize_transcript_preview,
+    build_transcript_ssot_from_contract_evidence,
     validate_transcript_non_replay,
+    summarize_transcript_preview,
 )
-from synth_platform.engine.generation.backends import GeneratorFactory
+from synth_platform.engine.generation.backends import GeneratorFactory, generate_transcript_twin_with_data_designer
 from synth_platform.infrastructure.integrations.nvidia_nemo import inspect_nvidia_nemo_environment
 from synth_platform.interfaces.streamlit.components.common.ux import platform_intro, step_guide, step_header
 from synth_platform.interfaces.streamlit.ui_config import ui_step, ui_value
@@ -22,10 +26,11 @@ from synth_platform.interfaces.streamlit.ui_config import ui_step, ui_value
 SETTINGS = Settings.from_env()
 TRANSCRIPT_UI = ui_value("transcript", default={})
 NVIDIA_ENV = inspect_nvidia_nemo_environment()
-NVIDIA_READY = any(
-    status.installed and getattr(status, "python_supported", True)
-    for status in NVIDIA_ENV.packages
-)
+DATA_DESIGNER_READY = (
+    NVIDIA_ENV.data_designer.installed
+    and getattr(NVIDIA_ENV.data_designer, "python_supported", True)
+) or util.find_spec("data_designer") is not None
+SDK_READY = DATA_DESIGNER_READY or os.getenv("SP_NEMO_DATA_DESIGNER_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
 
 st.title(TRANSCRIPT_UI.get("title", "Customer Interactions Twin"))
 platform_intro()
@@ -43,13 +48,14 @@ defaults = {
     "transcript_contract": None,
     "transcript_synthetic": None,
     "transcript_validation": None,
-    "transcript_requested_turns": None,
     "transcript_twin_zip_bytes": None,
     "transcript_generation_error": "",
-    "transcript_use_nvidia_nemo": SETTINGS.nvidia_nemo_enabled and NVIDIA_READY,
+    "transcript_use_nvidia_nemo": SETTINGS.nvidia_nemo_enabled and SDK_READY,
 }
 for key, value in defaults.items():
     st.session_state.setdefault(key, value)
+if SETTINGS.nvidia_nemo_enabled and SDK_READY:
+    st.session_state.transcript_use_nvidia_nemo = True
 
 
 def _reset_transcript_source() -> None:
@@ -59,29 +65,143 @@ def _reset_transcript_source() -> None:
     st.session_state.transcript_contract = None
     st.session_state.transcript_synthetic = None
     st.session_state.transcript_validation = None
-    st.session_state.transcript_requested_turns = None
     st.session_state.transcript_twin_zip_bytes = None
     st.session_state.transcript_generation_error = ""
 
 
 def _package_transcript_twin() -> bytes:
     contract = st.session_state.transcript_contract
-    synthetic = st.session_state.transcript_synthetic or []
+    synthetic_twin = st.session_state.transcript_synthetic or {}
+    turns = list(synthetic_twin.get("turns") or []) if isinstance(synthetic_twin, dict) else []
+    ssot = dict(synthetic_twin.get("structured_ssot") or {}) if isinstance(synthetic_twin, dict) else {}
     validation = st.session_state.transcript_validation or {}
-    synthetic_df = pd.DataFrame(synthetic)
     buffer = BytesIO()
     with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("canonical_contract.json", json.dumps(contract.model_dump(mode="json"), indent=2))
-        archive.writestr("synthetic_transcript.json", json.dumps(synthetic, indent=2))
-        archive.writestr("synthetic_transcript.csv", synthetic_df.to_csv(index=False))
+        archive.writestr("synthetic_interaction.json", json.dumps(synthetic_twin, indent=2))
+        archive.writestr("synthetic_interaction.csv", pd.DataFrame(turns).to_csv(index=False))
+        archive.writestr("transcript_twin_ssot.json", json.dumps(ssot or synthetic_twin, indent=2))
         archive.writestr("validation_report.json", json.dumps(validation, indent=2))
         archive.writestr(
             "README.txt",
             "Customer Interactions Twin artifact\n"
-            "Contains the twin contract, source-free synthetic customer interactions, "
+            "Contains the twin contract, synthetic interaction transcript, structured SSOT evidence, "
             "and validation evidence. Raw source interaction text is not included.\n",
         )
     return buffer.getvalue()
+
+
+def _structured_ssot_from_contract() -> dict:
+    contract = st.session_state.transcript_contract
+    metadata = contract.entities[0].metadata if contract and contract.entities else {}
+    ssot = metadata.get("structured_ssot")
+    return dict(ssot) if isinstance(ssot, dict) else {}
+
+
+def _contract_metadata(contract) -> dict:
+    return dict(contract.entities[0].metadata) if contract and contract.entities else {}
+
+
+def _default_synthetic_turns(contract) -> int:
+    source_turns = int(_contract_metadata(contract).get("turn_count") or SETTINGS.transcript_default_turns)
+    return max(4, min(source_turns, int(os.getenv("SP_TRANSCRIPT_UI_DEFAULT_TURNS", "12"))))
+
+
+def _demo_transcript_files() -> list[Path]:
+    data_dir = Path(os.getenv("SP_DEMO_DATA_DIR", "data"))
+    if not data_dir.exists():
+        return []
+    return sorted(path for path in data_dir.glob("*.txt") if path.is_file())
+
+
+def _build_synthetic_interaction_artifact(contract, ssot: dict, *, turn_count: int) -> dict:
+    metadata = _contract_metadata(contract)
+    generation_metadata = {}
+    mode = _transcript_twin_mode()
+    if mode == "full_sdk":
+        try:
+            backend = GeneratorFactory.create(SETTINGS.transcript_generation_backend)
+            result = generate_transcript_twin_with_data_designer(
+                contract,
+                turn_count=int(turn_count),
+                seed=SETTINGS.transcript_generation_seed,
+            )
+            turns = result.turns
+            ssot = result.structured_ssot
+            generation_metadata = result.metadata
+            if contract and contract.entities:
+                contract.entities[0].metadata["structured_ssot"] = ssot
+        except Exception as exc:
+            backend = GeneratorFactory.create("current")
+            ssot = _ensure_structured_ssot(contract)
+            turns = backend.generate_transcript(
+                contract,
+                turn_count=int(turn_count),
+                seed=SETTINGS.transcript_generation_seed,
+            )
+            generation_metadata = {
+                "mode": "full_sdk_fallback_to_demo_fast",
+                "full_sdk_error": str(exc)[:500],
+                "ssot_builder": "nemo_data_designer_local_slm",
+                "turn_generation": "platform_materializer",
+                "sdk_preview_calls": 1,
+            }
+    else:
+        backend_name = "current" if mode == "fast" else SETTINGS.transcript_generation_backend
+        backend = GeneratorFactory.create(backend_name if st.session_state.transcript_use_nvidia_nemo else "current")
+        turns = backend.generate_transcript(
+            contract,
+            turn_count=int(turn_count),
+            seed=SETTINGS.transcript_generation_seed,
+        )
+        if mode == "fast":
+            generation_metadata = {
+                "mode": "ssot_sdk_plus_platform_turns",
+                "ssot_builder": "nemo_data_designer_local_slm" if st.session_state.transcript_use_nvidia_nemo else "disabled",
+                "turn_generation": "platform_materializer",
+                "sdk_preview_calls": 1 if ssot.get("status") == "generated" and st.session_state.transcript_use_nvidia_nemo else 0,
+            }
+    turns = _friendly_synthetic_turns(turns, metadata)
+    return {
+        "status": "generated",
+        "artifact_type": "synthetic_customer_interaction",
+        "generation": {
+            "backend": backend.name,
+            "turn_count": len(turns),
+            "source_turn_count": metadata.get("turn_count"),
+            "source_speaker_count": metadata.get("speaker_count"),
+            "seed": SETTINGS.transcript_generation_seed,
+            "data_designer": generation_metadata,
+        },
+        "summary": {
+            "issue_type": (ssot.get("support_context") or {}).get("issue_type", "customer_support_request"),
+            "topic_terms": (ssot.get("support_context") or {}).get("topic_terms")
+            or ", ".join(metadata.get("topic_terms") or []),
+            "privacy": "Generated from sanitized contract only; raw source text is not included.",
+        },
+        "turns": turns,
+        "structured_ssot": ssot,
+    }
+
+
+def _friendly_synthetic_turns(turns: list[dict], metadata: dict) -> list[dict]:
+    speaker_roles = {str(key): str(value) for key, value in dict(metadata.get("speaker_roles") or {}).items()}
+    friendly: list[dict] = []
+    for index, row in enumerate(turns):
+        next_row = dict(row)
+        speaker = str(next_row.get("speaker") or "")
+        lower = speaker.strip().lower()
+        role = speaker_roles.get(speaker, "").lower()
+        if lower.startswith("speaker_"):
+            suffix = lower.rsplit("_", 1)[-1]
+            if suffix == "1" or role == "customer":
+                next_row["speaker"] = "Customer"
+            elif suffix == "2" or role == "agent":
+                next_row["speaker"] = "Agent"
+            else:
+                next_row["speaker"] = f"Participant {suffix}" if suffix.isdigit() else f"Participant {index + 1}"
+        friendly.append(next_row)
+    return friendly
 
 
 def _display_transcript_rows(rows: list[dict]) -> pd.DataFrame:
@@ -113,37 +233,237 @@ def _display_preview_rows(rows: list[dict]) -> pd.DataFrame:
     )
 
 
-def _validation_evidence(report: dict) -> dict:
-    max_self_similarity = report.get("max_self_similarity")
-    if max_self_similarity is None:
-        max_self_similarity = report.get("max_synthetic_similarity")
-    warning_threshold = report.get("variety_warning_threshold")
-    if warning_threshold is None:
-        warning_threshold = report.get("similarity_threshold")
+def _label_from_key(value: str) -> str:
+    return str(value or "").replace("_", " ").strip().title()
+
+
+def _display_value(value) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return ", ".join(f"{_label_from_key(str(key))}: {item}" for key, item in value.items())
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value or "")
+
+
+def _records_from_mapping(mapping: dict, *, key_label: str, value_label: str) -> pd.DataFrame:
+    rows = [
+        {
+            key_label: _label_from_key(str(key)),
+            value_label: _display_value(value),
+        }
+        for key, value in (mapping or {}).items()
+    ]
+    return pd.DataFrame(rows)
+
+
+def _records_from_list(records: list, *, fallback_label: str) -> pd.DataFrame:
+    rows: list[dict] = []
+    for index, record in enumerate(records or [], start=1):
+        if isinstance(record, dict):
+            rows.append({_label_from_key(str(key)): _display_value(value) for key, value in record.items()})
+        else:
+            rows.append({"#": index, fallback_label: _display_value(record)})
+    return pd.DataFrame(rows)
+
+
+def _section_text(mapping: dict, key: str, fallback: str = "") -> str:
+    return str((mapping or {}).get(key) or fallback)
+
+
+def _show_synthetic_interaction(artifact: dict) -> None:
+    generation = dict(artifact.get("generation") or {})
+    summary = dict(artifact.get("summary") or {})
+    turns = list(artifact.get("turns") or [])
+    st.markdown("**Synthetic interaction**")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Status", _label_from_key(str(artifact.get("status") or "unknown")))
+    c2.metric("Turns", int(generation.get("turn_count") or len(turns)))
+    c3.metric("Source speakers", generation.get("source_speaker_count") or "unknown")
+    issue_type = str(summary.get("issue_type") or "customer_support_request")
+    st.caption(f"Issue type: {_label_from_key(issue_type)}")
+    if summary.get("topic_terms"):
+        st.caption(f"Grounding topics: {summary['topic_terms']}")
+
+    if turns:
+        st.dataframe(
+            _display_transcript_rows(turns),
+            hide_index=True,
+            width="stretch",
+            column_config={"What they said": st.column_config.TextColumn("What they said", width="large")},
+        )
+
+    with st.expander("Structured SSOT evidence", expanded=False):
+        ssot = dict(artifact.get("structured_ssot") or {})
+        support_context = dict(ssot.get("support_context") or {})
+        e1, e2, e3 = st.columns(3)
+        e1.metric("SSOT status", _label_from_key(str(ssot.get("status") or "unknown")))
+        e2.metric("Source turns", _section_text(support_context, "turn_count", "unknown"))
+        e3.metric("Source speakers", _section_text(support_context, "speaker_count", "unknown"))
+        if support_context.get("issue_summary"):
+            st.write(support_context["issue_summary"])
+        st.json(ssot)
+
+    with st.expander("Technical JSON", expanded=False):
+        st.json(artifact)
+
+
+def _show_structured_twin(ssot: dict, *, validation: dict | None = None) -> None:
+    metadata = dict(ssot.get("metadata") or {})
+    support_context = dict(ssot.get("support_context") or {})
+    sentiment = dict(ssot.get("sentiment_analysis") or {})
+    privacy = dict(ssot.get("privacy_validation") or {})
+
+    st.markdown("**Interaction summary**")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Status", _label_from_key(str(ssot.get("status") or "unknown")))
+    m2.metric("Issue type", _label_from_key(_section_text(support_context, "issue_type", "support request")))
+    m3.metric("Turns", _section_text(support_context, "turn_count", "unknown"))
+    m4.metric("Speakers", _section_text(support_context, "speaker_count", "unknown"))
+    summary = _section_text(support_context, "issue_summary")
+    if summary:
+        st.write(summary)
+    topic_terms = _section_text(support_context, "topic_terms")
+    if topic_terms:
+        st.caption(f"Topics: {topic_terms}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Participants**")
+        entities_df = _records_from_mapping(dict(ssot.get("entities") or {}), key_label="Participant", value_label="Role")
+        st.dataframe(entities_df, hide_index=True, width="stretch")
+    with c2:
+        st.markdown("**Sentiment**")
+        s1, s2 = st.columns(2)
+        s1.metric("Start", _label_from_key(_section_text(sentiment, "initial_customer_sentiment", "unknown")))
+        s2.metric("End", _label_from_key(_section_text(sentiment, "final_customer_sentiment", "unknown")))
+
+    st.markdown("**Issues and outcomes**")
+    issues_df = _records_from_list(list(ssot.get("resolved_issues") or []), fallback_label="Issue")
+    st.dataframe(issues_df, hide_index=True, width="stretch")
+
+    st.markdown("**Actions captured**")
+    actions_df = _records_from_list(list(ssot.get("actions_taken") or []), fallback_label="Action")
+    st.dataframe(actions_df, hide_index=True, width="stretch")
+
+    account_mutations = list(ssot.get("account_mutations") or [])
+    if account_mutations:
+        st.markdown("**State updates**")
+        st.dataframe(_records_from_list(account_mutations, fallback_label="Update"), hide_index=True, width="stretch")
+
+    st.markdown("**Privacy checks**")
+    p1, p2, p3 = st.columns(3)
+    p1.metric("Raw source used", _display_value(privacy.get("raw_source_text_used")))
+    p2.metric("Identifiers removed", _display_value(privacy.get("source_identifiers_removed")))
+    p3.metric("Generated from sanitized turns", _display_value(privacy.get("generated_from_sanitized_turns")))
+    if validation is not None:
+        with st.expander("Validation details", expanded=False):
+            st.json(validation)
+
+    with st.expander("Technical JSON", expanded=False):
+        st.json(
+            {
+                "metadata": metadata,
+                "structured_twin": ssot,
+            }
+        )
+
+
+def _validate_structured_ssot_twin(contract, ssot: dict) -> dict:
+    status = ssot.get("status")
+    missing = [
+        key
+        for key in (
+            "metadata",
+            "entities",
+            "support_context",
+            "resolved_issues",
+            "actions_taken",
+            "sentiment_analysis",
+            "privacy_validation",
+        )
+        if key not in ssot
+    ]
+    serialized = json.dumps(ssot, sort_keys=True, default=str)
+    raw_hashes_present = "source_turn_hashes" in serialized or "source_ngram_hashes" in serialized
+    raw_source_text_used = False
+    if contract and contract.entities:
+        source_hashes = set(contract.entities[0].metadata.get("source_turn_hashes") or [])
+        raw_source_text_used = any(source_hash and source_hash in serialized for source_hash in source_hashes)
+    placeholder_values = [
+        value
+        for value in (
+            "synthetic_value",
+            "synthetic_resolution",
+            "account_support_guidance",
+            "synthetic_next_step_confirmed",
+        )
+        if value in serialized.lower()
+    ]
+    passed = (
+        status == "generated"
+        and not missing
+        and not raw_hashes_present
+        and not raw_source_text_used
+        and not placeholder_values
+    )
     return {
-        "passed": report.get("passed"),
-        "source_replay": {
-            "exact_replay_count": report.get("exact_replay_count"),
-            "ngram_replay_count": report.get("ngram_replay_count"),
-            "raw_source_text_used": report.get("raw_source_text_used"),
-        },
-        "synthetic_variety": {
-            "max_self_similarity": max_self_similarity,
-            "warning_threshold": warning_threshold,
-            "repeated_phrase_warning": report.get("repeated_phrase_warning"),
-        },
-        "nvidia_nemo_guardrails": report.get("nvidia_nemo_guardrails"),
+        "passed": passed,
+        "status": "passed" if passed else "review",
+        "structured_twin_status": status,
+        "missing_required_sections": missing,
+        "raw_source_text_used": raw_source_text_used,
+        "raw_hashes_present": raw_hashes_present,
+        "placeholder_values": placeholder_values,
     }
 
 
 def _nvidia_options() -> dict[str, str | bool]:
     return {
-        "enabled": bool(st.session_state.transcript_use_nvidia_nemo and NVIDIA_READY),
+        "enabled": bool(st.session_state.transcript_use_nvidia_nemo and SDK_READY),
+        "build_structured_ssot": False,
+        "curator_enabled": os.getenv("SP_TRANSCRIPT_CURATOR_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"},
         "curator_base_url": SETTINGS.nvidia_curator_base_url,
         "curator_api_key": SETTINGS.nvidia_curator_api_key,
         "curator_model": SETTINGS.nvidia_curator_model,
         "guardrails_config_path": SETTINGS.nvidia_guardrails_config_path,
     }
+
+
+def _ensure_structured_ssot(contract) -> dict:
+    metadata = _contract_metadata(contract)
+    ssot = dict(metadata.get("structured_ssot") or {})
+    if ssot.get("status") == "generated":
+        return ssot
+    ssot = build_transcript_ssot_from_contract_evidence(
+        contract,
+        enabled=bool(st.session_state.transcript_use_nvidia_nemo and SDK_READY),
+    )
+    if contract and contract.entities:
+        contract.entities[0].metadata["structured_ssot"] = ssot
+    return ssot
+
+
+def _use_single_call_transcript_twin() -> bool:
+    return _transcript_twin_mode() == "full_sdk"
+
+
+def _transcript_twin_mode() -> str:
+    if not bool(st.session_state.transcript_use_nvidia_nemo and SDK_READY):
+        return "platform"
+    output_mode = os.getenv("SP_TRANSCRIPT_TWIN_OUTPUT_MODE", "ssot").strip().lower()
+    if output_mode == "ssot":
+        return "fast"
+    raw = os.getenv("SP_TRANSCRIPT_TWIN_MODE", "").strip().lower()
+    full_sdk_allowed = os.getenv("SP_TRANSCRIPT_TWIN_ALLOW_FULL_SDK", "").strip().lower() in {"1", "true", "yes", "on"}
+    if raw in {"full", "full_sdk", "sdk", "single_call"} and full_sdk_allowed:
+        return "full_sdk"
+    if raw in {"row", "per_turn", "per-turn"}:
+        return "row"
+    if raw in {"platform", "current"}:
+        return "platform"
+    return "fast"
 
 
 with st.container(border=True):
@@ -157,6 +477,24 @@ with st.container(border=True):
     if input_locked and st.button("Start new interaction", icon=":material/restart_alt:"):
         _reset_transcript_source()
         st.rerun()
+    demo_files = _demo_transcript_files()
+    if demo_files and not input_locked:
+        selected_demo = st.selectbox(
+            "Demo interaction",
+            demo_files,
+            format_func=lambda path: path.name,
+            index=0,
+        )
+        if st.button("Load demo interaction", icon=":material/database:"):
+            st.session_state.transcript_text = selected_demo.read_text(encoding="utf-8", errors="replace")
+            st.session_state.transcript_source_name = selected_demo.name
+            st.session_state.transcript_preview = None
+            st.session_state.transcript_contract = None
+            st.session_state.transcript_synthetic = None
+            st.session_state.transcript_validation = None
+            st.session_state.transcript_twin_zip_bytes = None
+            st.session_state.transcript_generation_error = ""
+            st.rerun()
     uploaded = st.file_uploader("Interaction file", type=["txt", "log"], disabled=input_locked)
     pasted = st.text_area(
         "Or paste the interaction",
@@ -271,86 +609,105 @@ if st.session_state.transcript_contract is None:
 
 with st.container(border=True):
     step = ui_step("transcript", "generate")
-    step_header(4, step.get("title", "Create customer conversation"), st.session_state.transcript_synthetic is not None)
+    step_header(4, "Generate synthetic interaction", st.session_state.transcript_synthetic is not None)
     step_guide(
-        what=step.get("what", "Choose how many messages you want in the new conversation."),
-        next_step=step.get("next", "Check the conversation before downloading."),
+        what="Generate a privacy-safe synthetic conversation from the sanitized twin contract.",
+        next_step="Validate the synthetic interaction before downloading.",
     )
     contract = st.session_state.transcript_contract
-    entity_meta = contract.entities[0].metadata if contract.entities else {}
-    default_turns = int(entity_meta.get("turn_count") or SETTINGS.transcript_default_turns)
-    if st.session_state.transcript_requested_turns is None:
-        st.session_state.transcript_requested_turns = max(1, default_turns)
-    requested_turns = st.number_input(
-        "Number of messages",
-        min_value=1,
-        value=int(st.session_state.transcript_requested_turns),
-        step=1,
-        help="This can be different from the original conversation.",
+    ssot = _structured_ssot_from_contract()
+    source_turns = int(_contract_metadata(contract).get("turn_count") or SETTINGS.transcript_default_turns)
+    max_synthetic_turns = max(2, min(source_turns, 200))
+    target_turns = int(
+        st.number_input(
+            "Synthetic turns",
+            min_value=2,
+            max_value=max_synthetic_turns,
+            value=min(_default_synthetic_turns(contract), max_synthetic_turns),
+            step=1,
+        )
     )
-    st.session_state.transcript_requested_turns = int(requested_turns)
-    if st.button("Create conversation", icon=":material/auto_fix_high:", type="primary"):
-        try:
-            st.session_state.transcript_synthetic = GeneratorFactory.create(
-                SETTINGS.transcript_generation_backend
-            ).generate_transcript(
-                contract,
-                turn_count=int(requested_turns),
-                seed=SETTINGS.transcript_generation_seed,
-            )
-            st.session_state.transcript_generation_error = ""
-            st.session_state.transcript_validation = None
-            st.session_state.transcript_twin_zip_bytes = None
-            st.rerun()
-        except RuntimeError as exc:
-            st.session_state.transcript_synthetic = None
-            st.session_state.transcript_validation = None
-            st.session_state.transcript_twin_zip_bytes = None
-            st.session_state.transcript_generation_error = str(exc)
+    if st.button("Generate synthetic interaction", icon=":material/forum:", type="primary"):
+        ssot = _structured_ssot_from_contract()
+        if _transcript_twin_mode() == "fast" and ssot.get("status") != "generated":
+            ssot = _ensure_structured_ssot(contract)
+        if _use_single_call_transcript_twin() or ssot.get("status") == "generated":
+            try:
+                st.session_state.transcript_synthetic = _build_synthetic_interaction_artifact(
+                    contract,
+                    ssot,
+                    turn_count=target_turns,
+                )
+                st.session_state.transcript_generation_error = ""
+                st.session_state.transcript_validation = None
+                st.session_state.transcript_twin_zip_bytes = None
+                st.rerun()
+            except Exception as exc:
+                st.session_state.transcript_synthetic = None
+                st.session_state.transcript_validation = None
+                st.session_state.transcript_twin_zip_bytes = None
+                st.session_state.transcript_generation_error = str(exc)
+        else:
+            ssot = _ensure_structured_ssot(contract)
+            if ssot.get("status") == "generated":
+                st.rerun()
+            else:
+                st.session_state.transcript_synthetic = None
+                st.session_state.transcript_validation = None
+                st.session_state.transcript_twin_zip_bytes = None
+                st.session_state.transcript_generation_error = (
+                    f"Structured twin was not generated by the SDK path. Status: {ssot.get('status') or 'missing'}."
+                )
     if st.session_state.transcript_generation_error:
         st.error(st.session_state.transcript_generation_error)
     if st.session_state.transcript_synthetic:
-        st.dataframe(
-            _display_transcript_rows(st.session_state.transcript_synthetic),
-            hide_index=True,
-            width="stretch",
-            column_config={"What they said": st.column_config.TextColumn("What they said", width="large")},
-        )
+        _show_synthetic_interaction(st.session_state.transcript_synthetic)
 
 if st.session_state.transcript_synthetic is None:
     st.stop()
 
 with st.container(border=True):
     step = ui_step("transcript", "validate")
-    step_header(5, step.get("title", "Validate interaction"), st.session_state.transcript_validation is not None)
+    step_header(5, "Validate synthetic interaction", st.session_state.transcript_validation is not None)
     step_guide(
-        what=step.get("what", "Check that the synthetic interaction does not replay the source."),
+        what="Check that the generated conversation is complete and source-free.",
         next_step=step.get("next", "Download the finished twin."),
     )
-    if st.button("Validate interaction", icon=":material/verified:"):
-        st.session_state.transcript_validation = validate_transcript_non_replay(
+    if st.button("Validate synthetic interaction", icon=":material/verified:"):
+        artifact = st.session_state.transcript_synthetic or {}
+        transcript_report = validate_transcript_non_replay(
             st.session_state.transcript_contract,
-            st.session_state.transcript_synthetic,
+            list(artifact.get("turns") or []),
             nvidia_options=_nvidia_options(),
         )
+        ssot_report = _validate_structured_ssot_twin(
+            st.session_state.transcript_contract,
+            dict(artifact.get("structured_ssot") or {}),
+        )
+        st.session_state.transcript_validation = {
+            "passed": bool(transcript_report.get("passed")) and bool(ssot_report.get("passed")),
+            "status": "passed"
+            if bool(transcript_report.get("passed")) and bool(ssot_report.get("passed"))
+            else "review",
+            "synthetic_turns": len(artifact.get("turns") or []),
+            "raw_source_text_used": bool(transcript_report.get("raw_source_text_used")),
+            "transcript_non_replay": transcript_report,
+            "structured_ssot": ssot_report,
+        }
         st.session_state.transcript_twin_zip_bytes = None
         st.rerun()
     if st.session_state.transcript_validation is not None:
         report = st.session_state.transcript_validation
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Replay check", "passed" if report["passed"] else "review")
-        c2.metric("Exact replays", report["exact_replay_count"])
-        c3.metric("N-gram replays", report["ngram_replay_count"])
-        c4.metric("Raw source retained", "no" if not report["raw_source_text_used"] else "yes")
-        c5.metric("Variety warning", "yes" if report.get("repeated_phrase_warning") else "no")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Synthetic interaction", "passed" if report["passed"] else "review")
+        c2.metric("Turns checked", report.get("synthetic_turns", 0))
+        c3.metric("Raw source retained", "no" if not report["raw_source_text_used"] else "yes")
         if report["passed"]:
-            st.success("Passed. No source replay or raw interaction retention was detected.")
-            if report.get("repeated_phrase_warning"):
-                st.info("Some generated turns are similar to each other. This is a variety warning, not source replay.")
+            st.success("Passed. The synthetic interaction is source-free.")
         else:
-            st.warning("Needs review. Check replay counts before downloading.")
+            st.warning("Needs review. Check the synthetic interaction before downloading.")
         with st.expander("Validation details", expanded=False):
-            st.json(_validation_evidence(report))
+            st.json(report)
 
 if st.session_state.transcript_validation is None:
     st.stop()
@@ -365,26 +722,17 @@ with st.container(border=True):
     if st.session_state.transcript_twin_zip_bytes is None:
         st.session_state.transcript_twin_zip_bytes = _package_transcript_twin()
     c1, c2, c3 = st.columns(3)
-    c1.metric("Messages", len(st.session_state.transcript_synthetic or []))
+    c1.metric("Twin status", (st.session_state.transcript_synthetic or {}).get("status", "unknown"))
     c2.metric("Validation", "passed" if (st.session_state.transcript_validation or {}).get("passed") else "review")
     c3.metric("Raw source included", "no")
 
-    st.markdown("**Generated twin**")
-    contract = st.session_state.transcript_contract
-    synthetic = st.session_state.transcript_synthetic or []
     validation = st.session_state.transcript_validation or {}
-    st.dataframe(
-        _display_transcript_rows(synthetic).head(20),
-        hide_index=True,
-        width="stretch",
-        column_config={"What they said": st.column_config.TextColumn("What they said", width="large")},
-    )
 
     with st.expander("What's included in the ZIP", expanded=False):
-        st.write("Synthetic interaction CSV/JSON, twin contract, validation report, and README.")
+        st.write("Structured twin JSON, twin contract, validation report, and README.")
 
     with st.expander("Validation evidence", expanded=False):
-        st.json(_validation_evidence(validation))
+        st.json(validation)
 
     st.download_button(
         "Download customer interactions twin (ZIP)",

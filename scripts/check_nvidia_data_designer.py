@@ -1,9 +1,10 @@
 r"""Check OpenAI-compatible provider connectivity for direct calls and Data Designer.
 
 Usage:
-    $env:SP_NEMO_DATA_DESIGNER_ENDPOINT="http://localhost:8000/v1"
-    $env:SP_NEMO_DATA_DESIGNER_PROVIDER="internal"
-    $env:SP_NEMO_DATA_DESIGNER_MODEL="local/slm"
+    $env:SP_PLATFORM_SLM_ENDPOINT="http://localhost:11434/v1"
+    $env:SP_PLATFORM_SLM_PROVIDER="internal"
+    $env:SP_PLATFORM_SLM_MODEL="synth-platform-slm"
+    $env:SP_NEMO_DATA_DESIGNER_API_KEY="ollama"
     .\.venv\Scripts\python.exe scripts\check_nvidia_data_designer.py
 """
 
@@ -11,12 +12,27 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 
-ENDPOINT = os.getenv("SP_NEMO_DATA_DESIGNER_ENDPOINT", "http://localhost:8000/v1")
-PROVIDER = os.getenv("SP_NEMO_DATA_DESIGNER_PROVIDER", "internal")
-MODEL = os.getenv("SP_NEMO_DATA_DESIGNER_MODEL", "local/slm")
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from synth_platform.engine.generation.slm_runtime import resolve_platform_slm_runtime
+from synth_platform.engine.generation.data_designer_provider import (
+    build_data_designer_model_config,
+    build_data_designer_provider,
+    load_data_designer_sdk,
+)
+
+
+RUNTIME = resolve_platform_slm_runtime()
+ENDPOINT = RUNTIME.endpoint
+PROVIDER = RUNTIME.provider
+MODEL = RUNTIME.model_id
 API_KEY_ENV = "SP_NEMO_DATA_DESIGNER_API_KEY"
 
 
@@ -43,7 +59,7 @@ def check_direct_openai_compatible() -> None:
         messages=[{"role": "user", "content": "Return exactly the word ready."}],
         temperature=0,
         top_p=0.95,
-        max_tokens=32,
+        max_tokens=64,
         stream=False,
     )
     content = completion.choices[0].message.content or ""
@@ -51,23 +67,16 @@ def check_direct_openai_compatible() -> None:
 
 
 def check_data_designer() -> None:
-    os.environ["DATA_DESIGNER_SKIP_MODEL_HEALTH_CHECKS"] = "1"
-
-    import data_designer.config as dd
-    from data_designer.interface import DataDesigner
-
+    dd, DataDesigner = load_data_designer_sdk()
     builder = dd.DataDesignerConfigBuilder(
         model_configs=[
-            dd.ModelConfig(
-                alias="provider-check",
-                provider=PROVIDER,
-                model=MODEL,
-                skip_health_check=True,
-                inference_parameters=dd.ChatCompletionInferenceParams(
-                    temperature=0,
-                    top_p=0.95,
-                    max_tokens=32,
-                ),
+            build_data_designer_model_config(
+                dd,
+                "provider-check",
+                workflow="provider-smoke-test",
+                runtime=RUNTIME,
+                temperature=0,
+                top_p=0.95,
             )
         ]
     )
@@ -86,12 +95,7 @@ def check_data_designer() -> None:
             prompt="For request {{ request_id }}, return exactly the word ready.",
         )
     )
-    provider = dd.ModelProvider(
-        name=PROVIDER,
-        endpoint=ENDPOINT,
-        provider_type="openai",
-        api_key=None if _is_local_endpoint(ENDPOINT) else API_KEY_ENV,
-    )
+    provider = build_data_designer_provider(dd, RUNTIME)
     preview = DataDesigner(model_providers=[provider]).preview(builder, num_records=1)
     dataset = getattr(preview, "dataset", preview)
     frame = dataset.to_pandas() if hasattr(dataset, "to_pandas") else dataset

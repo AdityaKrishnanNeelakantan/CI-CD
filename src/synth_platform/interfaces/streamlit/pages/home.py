@@ -35,12 +35,3 @@ for column, workflow in zip(st.columns(max(1, len(workflows))), workflows):
         st.caption(workflow["caption"])
         _safe_page_link(workflow["page"], label=workflow["link_label"], icon=workflow["icon"])
 
-st.divider()
-st.markdown(f"### {HOME_CONFIG.get('controls_heading', 'Shared platform controls')}")
-controls = HOME_CONFIG.get("controls", [])
-for column, control in zip(st.columns(max(1, len(controls))), controls):
-    column.metric(control["label"], control["value"])
-
-st.divider()
-with st.expander("Technical details", expanded=False):
-    st.caption(HOME_CONFIG.get("technical_details", ""))

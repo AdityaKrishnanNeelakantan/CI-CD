@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+import hashlib
 from importlib import util
 import json
 import os
@@ -10,13 +12,30 @@ from pathlib import Path
 import re
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+import uuid
 
 import pandas as pd
 
 from synth_platform.domain.contracts.models import CanonicalContract
 from synth_platform.engine.common.database.core.stage_result import STATUS_SUCCESS, StageResult
+from synth_platform.engine.transcripts import ssot_designer as transcript_ssot_designer
 from synth_platform.engine.transcripts.service import generate_synthetic_transcript
+from synth_platform.engine.generation.slm_runtime import (
+    PlatformSLMRuntime,
+    data_designer_max_parallel_requests,
+    data_designer_max_tokens,
+    data_designer_skip_health_check,
+    data_designer_timeout,
+    is_local_endpoint,
+    preflight_slm_endpoint,
+    require_data_designer_api_key,
+    resolve_platform_slm_runtime,
+)
+from synth_platform.engine.generation.data_designer_provider import (
+    build_data_designer_model_config,
+    build_data_designer_provider,
+    load_data_designer_sdk,
+)
 
 
 class UnsupportedGenerationBackend(NotImplementedError):
@@ -87,12 +106,13 @@ class BackendDatabaseResult:
 
 
 @dataclass(frozen=True)
-class DataDesignerRuntime:
-    model_id: str
-    provider: str
-    endpoint: str
-    api_key_env: str
-    model_family: str
+class BackendTranscriptTwinResult:
+    turns: list[dict[str, Any]]
+    structured_ssot: dict[str, Any]
+    metadata: dict[str, Any]
+
+
+DataDesignerRuntime = PlatformSLMRuntime
 
 
 @dataclass(frozen=True)
@@ -150,9 +170,26 @@ class NemoBackend(GenerationBackend):
         seed = int(kwargs.get("seed") or 0)
         output_dir = Path(kwargs["output_dir"])
         export_format = str(kwargs.get("export_format") or "csv")
+        schema_row_mode = os.getenv("SP_SCHEMA_ROW_GENERATION_MODE", "deterministic").strip().lower()
         if export_format != "csv":
             raise ValueError("NeMo schema backend currently supports CSV export only.")
-        if _mock_data_designer_enabled():
+        if schema_row_mode in {"deterministic", "fast", "platform"}:
+            tables = _deterministic_schema_tables(
+                contract,
+                row_count=row_count,
+                table_row_counts=table_row_counts,
+                seed=seed,
+                text_prefix="nemo_schema",
+            )
+            metadata = {
+                "backend": self.name,
+                "data_designer": {
+                    "mode": "schema_draft_plus_deterministic_rows",
+                    "model_alias": "schema-draft-generator",
+                    "row_generation": "deterministic_platform_generator",
+                },
+            }
+        elif _mock_data_designer_enabled():
             tables = _mock_schema_tables(contract, row_count=row_count, table_row_counts=table_row_counts, seed=seed)
             metadata = {
                 "backend": self.name,
@@ -305,7 +342,7 @@ def _data_designer_user_prompt() -> str:
 
 
 def _data_designer_api_key_env() -> str:
-    return "SP_NEMO_DATA_DESIGNER_API_KEY"
+    return resolve_platform_slm_runtime().api_key_env
 
 
 def _data_designer_api_key() -> str | None:
@@ -313,24 +350,11 @@ def _data_designer_api_key() -> str | None:
 
 
 def _data_designer_endpoint() -> str:
-    return os.getenv("SP_NEMO_DATA_DESIGNER_ENDPOINT", "http://localhost:8000/v1")
+    return resolve_platform_slm_runtime().endpoint
 
 
 def _is_local_endpoint(endpoint: str) -> bool:
-    parsed = urlparse(endpoint)
-    host = (parsed.hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1"}
-
-
-def _data_designer_model_provider_api_key(runtime: DataDesignerRuntime) -> str | None:
-    key = os.getenv(runtime.api_key_env) or _data_designer_api_key()
-    if key:
-        if not os.getenv(runtime.api_key_env):
-            os.environ[runtime.api_key_env] = key
-        return runtime.api_key_env
-    if _is_local_endpoint(runtime.endpoint):
-        return None
-    return runtime.api_key_env
+    return is_local_endpoint(endpoint)
 
 
 def _data_designer_chat_extra_body(runtime: DataDesignerRuntime) -> dict[str, Any] | None:
@@ -339,43 +363,15 @@ def _data_designer_chat_extra_body(runtime: DataDesignerRuntime) -> dict[str, An
 
 def _digital_twin_data_designer_runtime() -> DataDesignerRuntime:
     """Resolve the open-source SLM used by PDF/TXT twin generation."""
-    return DataDesignerRuntime(
-        model_id=os.getenv(
-            "SP_DIGITAL_TWIN_SLM_MODEL",
-            os.getenv("SP_NEMO_DATA_DESIGNER_MODEL", "local/slm"),
-        ),
-        provider=os.getenv(
-            "SP_DIGITAL_TWIN_SLM_PROVIDER",
-            os.getenv("SP_NEMO_DATA_DESIGNER_PROVIDER", "internal"),
-        ),
-        endpoint=os.getenv("SP_DIGITAL_TWIN_SLM_ENDPOINT", _data_designer_endpoint()),
-        api_key_env=os.getenv("SP_DIGITAL_TWIN_SLM_API_KEY_ENV", _data_designer_api_key_env()),
-        model_family=os.getenv("SP_DIGITAL_TWIN_MODEL_FAMILY", "open_source_slm"),
-    )
+    return resolve_platform_slm_runtime()
 
 
 def _require_data_designer_api_key(runtime: DataDesignerRuntime) -> None:
-    key = os.getenv(runtime.api_key_env) or _data_designer_api_key()
-    if key:
-        if not os.getenv(runtime.api_key_env):
-            os.environ[runtime.api_key_env] = key
-        return
-    if _is_local_endpoint(runtime.endpoint):
-        return
-    env_names = list(dict.fromkeys([runtime.api_key_env, "SP_NEMO_DATA_DESIGNER_API_KEY"]))
-    raise RuntimeError(
-        "Set one of these environment variables before running this workflow: "
-        f"{', '.join(env_names)}."
-    )
+    require_data_designer_api_key(runtime)
 
 
 def _data_designer_skip_health_check() -> bool:
-    return os.getenv("SP_NEMO_DATA_DESIGNER_SKIP_HEALTH_CHECK", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return data_designer_skip_health_check()
 
 
 def _generate_transcript_with_data_designer(
@@ -404,69 +400,268 @@ def _generate_transcript_with_standalone_data_designer(
     turn_count: int | None,
     seed: int | None,
 ) -> list[dict[str, Any]]:
+    mode = os.getenv("SP_TRANSCRIPT_GENERATION_MODE", "structured").strip().lower()
+    if mode in {"row", "per_turn", "per-turn"}:
+        return _generate_transcript_rows_with_standalone_data_designer(
+            contract,
+            turn_count=turn_count,
+            seed=seed,
+        )
+    return _generate_transcript_structured_with_standalone_data_designer(
+        contract,
+        turn_count=turn_count,
+        seed=seed,
+    )
+
+
+def _generate_transcript_structured_with_standalone_data_designer(
+    contract: CanonicalContract,
+    *,
+    turn_count: int | None,
+    seed: int | None,
+) -> list[dict[str, Any]]:
     try:
-        import data_designer.config as dd
-        from data_designer.interface import DataDesigner
+        dd, DataDesigner = load_data_designer_sdk()
     except ImportError as exc:
         raise RuntimeError("Data Designer standalone SDK is not importable.") from exc
 
     runtime = _digital_twin_data_designer_runtime()
     _require_data_designer_api_key(runtime)
+    preflight_slm_endpoint(runtime)
     skip_health_check = _data_designer_skip_health_check()
     model_alias = "transcript-generator"
     target_turns = int(turn_count or _contract_turn_count(contract) or 8)
+    turn_seed_frame = _transcript_turn_seed_frame(contract, target_turns=target_turns, seed=seed)
     seed_frame = pd.DataFrame(
         [
             {
-                "source_contract_json": _transcript_data_designer_seed(contract, target_turns),
+                "source_contract_json": _transcript_structured_generation_seed(turn_seed_frame, target_turns),
                 "target_turn_count": target_turns,
                 "user_prompt": _data_designer_user_prompt(),
             }
         ]
     )
-    prompt = _transcript_data_designer_prompt()
 
-    model_config = dd.ModelConfig(
-        alias=model_alias,
-        model=runtime.model_id,
-        provider=runtime.provider,
+    model_config = build_data_designer_model_config(
+        dd,
+        model_alias,
+        workflow="transcript-conversation-structured",
+        runtime=runtime,
+        temperature=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TEMPERATURE", "0.2")),
+        top_p=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TOP_P", "0.9")),
+        timeout_env="SP_TRANSCRIPT_DATA_DESIGNER_TIMEOUT",
+        parallel_env="SP_TRANSCRIPT_DATA_DESIGNER_MAX_PARALLEL_REQUESTS",
+        extra_body=_data_designer_chat_extra_body(runtime),
         skip_health_check=skip_health_check,
-        inference_parameters=dd.ChatCompletionInferenceParams(
-            temperature=float(os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.65")),
-            top_p=float(os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.95")),
-            max_tokens=int(os.getenv("SP_NEMO_DATA_DESIGNER_MAX_TOKENS", "2048")),
-            extra_body=_data_designer_chat_extra_body(runtime),
-        ),
     )
     builder = dd.DataDesignerConfigBuilder(model_configs=[model_config])
     builder.with_seed_dataset(dd.DataFrameSeedSource(df=seed_frame))
     builder.add_column(
         dd.LLMStructuredColumnConfig(
             name="synthetic_transcript_json",
-            prompt=prompt,
+            prompt=_transcript_data_designer_prompt(),
             system_prompt=(
-                "Generate only valid JSON. Do not include Markdown, comments, source identifiers, "
+                "Return only the requested JSON object. Do not include Markdown, comments, source identifiers, "
                 "or raw source transcript text."
             ),
             model_alias=model_alias,
-            output_format=_transcript_json_schema(),
+            output_format=_transcript_json_schema(target_turns),
         )
     )
 
-    data_designer = DataDesigner(
-        model_providers=[
-            dd.ModelProvider(
-                name=runtime.provider,
-                endpoint=runtime.endpoint,
-                provider_type="openai",
-                api_key=_data_designer_model_provider_api_key(runtime),
-            )
-        ]
-    )
+    data_designer = DataDesigner(model_providers=[build_data_designer_provider(dd, runtime)])
     preview = data_designer.preview(builder, num_records=1)
     dataset = getattr(preview, "dataset", preview)
     value = _extract_data_designer_value(dataset, "synthetic_transcript_json")
     rows = _parse_transcript_json(value)
+    return _transcript_rows_from_structured_data_designer(rows, turn_seed_frame)
+
+
+def generate_transcript_twin_with_data_designer(
+    contract: CanonicalContract,
+    *,
+    turn_count: int | None,
+    seed: int | None,
+) -> BackendTranscriptTwinResult:
+    """Generate structured SSOT and synthetic transcript turns in one SDK preview."""
+    output_mode = os.getenv("SP_TRANSCRIPT_TWIN_OUTPUT_MODE", "ssot").strip().lower()
+    if output_mode == "ssot":
+        ssot = transcript_ssot_designer.build_transcript_ssot_from_contract_evidence(contract, enabled=True)
+        if ssot.get("status") != "generated":
+            raise RuntimeError(f"Transcript SSOT generation failed: {ssot.get('reason') or ssot.get('status')}")
+        return BackendTranscriptTwinResult(
+            turns=generate_synthetic_transcript(contract, turn_count=turn_count, seed=seed),
+            structured_ssot=ssot,
+            metadata={
+                "mode": "ssot_only_sdk_plus_platform_turns",
+                "model_alias": "transcript-ssot-builder",
+                "sdk_preview_calls": 1,
+            },
+        )
+    if _mock_data_designer_enabled():
+        rows = _mock_data_designer_transcript(contract, turn_count=turn_count, seed=seed)
+        ssot = transcript_ssot_designer.build_transcript_ssot_from_contract_evidence(contract, enabled=True)
+        return BackendTranscriptTwinResult(
+            turns=rows,
+            structured_ssot=ssot,
+            metadata={"mode": "mock", "sdk_preview_calls": 0},
+        )
+    if util.find_spec("data_designer") is None:
+        raise RuntimeError(
+            "Combined transcript twin generation requires the standalone Data Designer SDK. "
+            "Install data-designer in a Python <3.14 environment."
+        )
+    return _generate_transcript_twin_with_standalone_data_designer(
+        contract,
+        turn_count=turn_count,
+        seed=seed,
+    )
+
+
+def _generate_transcript_twin_with_standalone_data_designer(
+    contract: CanonicalContract,
+    *,
+    turn_count: int | None,
+    seed: int | None,
+) -> BackendTranscriptTwinResult:
+    try:
+        dd, DataDesigner = load_data_designer_sdk()
+    except ImportError as exc:
+        raise RuntimeError("Data Designer standalone SDK is not importable.") from exc
+
+    runtime = _digital_twin_data_designer_runtime()
+    _require_data_designer_api_key(runtime)
+    preflight_slm_endpoint(runtime)
+    skip_health_check = _data_designer_skip_health_check()
+    model_alias = "transcript-twin-generator"
+    target_turns = int(turn_count or _contract_turn_count(contract) or 8)
+    turn_seed_frame = _transcript_turn_seed_frame(contract, target_turns=target_turns, seed=seed)
+    seed_frame = pd.DataFrame(
+        [
+            {
+                "source_contract_json": _transcript_structured_generation_seed(turn_seed_frame, target_turns),
+                "target_turn_count": target_turns,
+                "user_prompt": _data_designer_user_prompt(),
+            }
+        ]
+    )
+    model_config = build_data_designer_model_config(
+        dd,
+        model_alias,
+        workflow="transcript-twin-structured",
+        runtime=runtime,
+        temperature=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TEMPERATURE", "0.2")),
+        top_p=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TOP_P", "0.9")),
+        timeout_env="SP_TRANSCRIPT_DATA_DESIGNER_TIMEOUT",
+        parallel_env="SP_TRANSCRIPT_DATA_DESIGNER_MAX_PARALLEL_REQUESTS",
+        extra_body=_data_designer_chat_extra_body(runtime),
+        skip_health_check=skip_health_check,
+    )
+    builder = dd.DataDesignerConfigBuilder(model_configs=[model_config])
+    builder.with_seed_dataset(dd.DataFrameSeedSource(df=seed_frame))
+    builder.add_column(
+        dd.LLMStructuredColumnConfig(
+            name="synthetic_twin_json",
+            prompt=_transcript_twin_data_designer_prompt(),
+            system_prompt=(
+                "Return only the requested JSON object. Do not include Markdown, comments, source identifiers, "
+                "or raw source transcript text."
+            ),
+            model_alias=model_alias,
+            output_format=_transcript_twin_json_schema(target_turns),
+        )
+    )
+    data_designer = DataDesigner(model_providers=[build_data_designer_provider(dd, runtime)])
+    preview = data_designer.preview(builder, num_records=1)
+    dataset = getattr(preview, "dataset", preview)
+    payload = _coerce_data_designer_mapping(_extract_data_designer_value(dataset, "synthetic_twin_json"))
+    turns = _transcript_rows_from_structured_data_designer(_parse_transcript_json(payload.get("turns")), turn_seed_frame)
+    ssot = transcript_ssot_designer._enrich_ssot_payload(
+        _coerce_data_designer_mapping(payload.get("structured_ssot")),
+        transcript_ssot_designer._contract_evidence_turns(_contract_metadata_dict(contract)),
+        source_name=str(contract.contract_id or "transcript"),
+    )
+    ssot["status"] = "generated"
+    validation = transcript_ssot_designer._validate_ssot_value(ssot)
+    if not transcript_ssot_designer._validation_passed(validation):
+        raise RuntimeError(
+            "NeMo Data Designer transcript twin SSOT failed SDK validation: "
+            f"{transcript_ssot_designer._validation_error(validation)}"
+        )
+    return BackendTranscriptTwinResult(
+        turns=turns,
+        structured_ssot=ssot,
+        metadata={
+            "mode": "transcript_twin_single_structured_preview",
+            "model_alias": model_alias,
+            "provider": runtime.provider,
+            "model": runtime.model_id,
+            "sdk_preview_calls": 1,
+        },
+    )
+
+
+def _generate_transcript_rows_with_standalone_data_designer(
+    contract: CanonicalContract,
+    *,
+    turn_count: int | None,
+    seed: int | None,
+) -> list[dict[str, Any]]:
+    try:
+        dd, DataDesigner = load_data_designer_sdk()
+    except ImportError as exc:
+        raise RuntimeError("Data Designer standalone SDK is not importable.") from exc
+
+    runtime = _digital_twin_data_designer_runtime()
+    _require_data_designer_api_key(runtime)
+    preflight_slm_endpoint(runtime)
+    skip_health_check = _data_designer_skip_health_check()
+    model_alias = "transcript-generator"
+    target_turns = int(turn_count or _contract_turn_count(contract) or 8)
+    seed_frame = _transcript_turn_seed_frame(contract, target_turns=target_turns, seed=seed)
+
+    model_config = build_data_designer_model_config(
+        dd,
+        model_alias,
+        workflow="transcript-conversation-row",
+        runtime=runtime,
+        temperature=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TEMPERATURE", "0.2")),
+        top_p=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TOP_P", "0.9")),
+        timeout_env="SP_TRANSCRIPT_DATA_DESIGNER_TIMEOUT",
+        parallel_env="SP_TRANSCRIPT_DATA_DESIGNER_MAX_PARALLEL_REQUESTS",
+        extra_body=_data_designer_chat_extra_body(runtime),
+        skip_health_check=skip_health_check,
+    )
+    builder = dd.DataDesignerConfigBuilder(model_configs=[model_config])
+    builder.with_seed_dataset(dd.DataFrameSeedSource(df=seed_frame))
+    builder.add_column(
+        dd.LLMTextColumnConfig(
+            name="synthetic_message",
+            prompt=_transcript_turn_prompt(),
+            system_prompt=(
+                "Return only the final customer-interaction utterance text. "
+                "Do not include speaker labels, speaker IDs, placeholders, Markdown, JSON, phone numbers, emails, "
+                "account numbers, source identifiers, or raw source text."
+            ),
+            model_alias=model_alias,
+        )
+    )
+    builder.add_column(
+        dd.ValidationColumnConfig(
+            name="synthetic_message_validation",
+            target_columns=["synthetic_message"],
+            validator_type=dd.ValidatorType.LOCAL_CALLABLE,
+            validator_params=dd.LocalCallableValidatorParams(
+                validation_function=_validate_data_designer_transcript_messages
+            ),
+            batch_size=25,
+        )
+    )
+
+    data_designer = DataDesigner(model_providers=[build_data_designer_provider(dd, runtime)])
+    preview = data_designer.preview(builder, num_records=target_turns)
+    dataset = getattr(preview, "dataset", preview)
+    rows = _transcript_rows_from_data_designer(dataset, seed_frame)
     return _normalize_transcript_rows(rows, target_turns=target_turns)
 
 
@@ -491,7 +686,7 @@ def _generate_transcript_with_nemo_microservices(
 
     runtime = _digital_twin_data_designer_runtime()
     _require_data_designer_api_key(runtime)
-    base_url = os.getenv("SP_NEMO_DATA_DESIGNER_BASE_URL", "https://ai.api.nvidia.com/v1/nemo/dd")
+    base_url = os.getenv("SP_NEMO_DATA_DESIGNER_BASE_URL", runtime.endpoint)
     model_alias = "transcript-generator"
     target_turns = int(turn_count or _contract_turn_count(contract) or 8)
     prompt = _transcript_data_designer_inline_prompt(contract, target_turns)
@@ -501,9 +696,13 @@ def _generate_transcript_with_nemo_microservices(
         "model": runtime.model_id,
         "provider": runtime.provider,
         "inference_parameters": InferenceParameters(
-            temperature=float(os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.65")),
-            top_p=float(os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.95")),
-            max_tokens=int(os.getenv("SP_NEMO_DATA_DESIGNER_MAX_TOKENS", "2048")),
+            max_parallel_requests=data_designer_max_parallel_requests(
+                workflow_env="SP_TRANSCRIPT_DATA_DESIGNER_MAX_PARALLEL_REQUESTS"
+            ),
+            timeout=data_designer_timeout(workflow_env="SP_TRANSCRIPT_DATA_DESIGNER_TIMEOUT"),
+            temperature=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TEMPERATURE", "0.2")),
+            top_p=float(os.getenv("SP_TRANSCRIPT_DATA_DESIGNER_TOP_P", "0.9")),
+            max_tokens=data_designer_max_tokens(512, workflow_env="SP_TRANSCRIPT_DATA_DESIGNER_MAX_TOKENS"),
         ),
     }
 
@@ -552,6 +751,514 @@ def _extract_data_designer_value(dataset: Any, column: str) -> Any:
     raise RuntimeError("Unsupported NeMo Data Designer preview response shape.")
 
 
+def _transcript_structured_generation_seed(turn_seed_frame: pd.DataFrame, target_turns: int) -> str:
+    prompt_columns = [
+        "turn",
+        "speaker",
+        "speaker_role",
+        "conversation_phase",
+        "issue_type",
+        "issue_summary",
+        "conversation_topic",
+        "topic_terms",
+        "domain",
+        "source_locale",
+        "target_locale",
+        "target_persona",
+        "message_goal",
+        "reference",
+    ]
+    available_columns = [column for column in prompt_columns if column in turn_seed_frame.columns]
+    return json.dumps(
+        {
+            "target_turn_count": target_turns,
+            "turn_plan": turn_seed_frame[available_columns].to_dict(orient="records"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _transcript_twin_data_designer_prompt() -> str:
+    return (
+        "Create one complete synthetic customer interaction twin from sanitized contract metadata only.\n"
+        "User generation instructions: {{ user_prompt }}\n"
+        "Target turn count: {{ target_turn_count }}\n"
+        "Sanitized contract metadata JSON: {{ source_contract_json }}\n"
+        "Return a JSON object with exactly two keys: structured_ssot and turns.\n"
+        "structured_ssot must follow the requested structured twin schema.\n"
+        "turns must contain exactly the requested number of synthetic messages with turn, speaker, timestamp, and text.\n"
+        "Use the turn plan speaker and speaker_role values. Preserve the support flow from the issue summary, "
+        "message goals, and grounding terms. Do not copy source text. Do not include phone numbers, emails, "
+        "account numbers, markdown, labels inside message text, or raw source transcript text."
+    )
+
+
+def _transcript_twin_json_schema(target_turns: int | None = None) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "structured_ssot": transcript_ssot_designer._ssot_schema(),
+            "turns": _transcript_json_schema(target_turns)["properties"]["turns"],
+        },
+        "required": ["structured_ssot", "turns"],
+        "additionalProperties": False,
+    }
+
+
+def _coerce_data_designer_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    parsed = json.loads(str(value))
+    if not isinstance(parsed, dict):
+        raise RuntimeError("NeMo Data Designer structured output must be a JSON object.")
+    return parsed
+
+
+def _contract_metadata_dict(contract: CanonicalContract) -> dict[str, Any]:
+    entity = contract.entities[0] if contract.entities else None
+    return dict(entity.metadata if entity else {})
+
+
+def _transcript_rows_from_structured_data_designer(
+    rows: list[dict[str, Any]],
+    seed_frame: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    seed_records = seed_frame.to_dict(orient="records")
+    if len(rows) != len(seed_records):
+        raise RuntimeError(
+            "NeMo Data Designer transcript batch failed SDK validation: "
+            f"generated {len(rows)} turns for {len(seed_records)} requested turns"
+        )
+    aligned_rows: list[dict[str, Any]] = []
+    for idx, seed_record in enumerate(seed_records):
+        source_row = rows[idx]
+        text = _clean_transcript_message(
+            source_row.get("text") or source_row.get("content") or source_row.get("message")
+        )
+        validation = _validate_data_designer_transcript_message(
+            {
+                **seed_record,
+                "synthetic_message": text,
+            }
+        )
+        if not validation["is_valid"]:
+            raise RuntimeError(
+                "NeMo Data Designer transcript message failed SDK validation: "
+                f"{validation['error_messages']}"
+            )
+        aligned_rows.append(
+            {
+                "turn": int(seed_record.get("turn") or idx + 1),
+                "speaker": str(seed_record.get("speaker") or ("Customer" if idx % 2 == 0 else "Agent")),
+                "timestamp": str(source_row.get("timestamp") or ""),
+                "text": text,
+            }
+        )
+    _validate_transcript_row_batch_quality(aligned_rows, expected_rows=len(seed_records))
+    return aligned_rows
+
+
+def _transcript_turn_seed_frame(
+    contract: CanonicalContract,
+    *,
+    target_turns: int,
+    seed: int | None,
+) -> pd.DataFrame:
+    entity = contract.entities[0] if contract.entities else None
+    metadata = dict(entity.metadata if entity else {})
+    context = dict(metadata.get("synthetic_context") or {})
+    support_context = _transcript_support_context(metadata)
+    topic_terms = _transcript_generation_topic_terms(support_context, metadata)
+    source_turn_hashes_json = json.dumps([str(value) for value in metadata.get("source_turn_hashes") or []])
+    source_ngram_hashes_json = json.dumps([str(value) for value in metadata.get("source_ngram_hashes") or []])
+    topic = _transcript_conversation_topic(topic_terms, support_context=support_context)
+    reference = "the synthetic case"
+    if context.get("claim_id") or context.get("tracking_id"):
+        reference = "the mock case reference"
+    elif context.get("policy_id"):
+        reference = "the mock policy reference"
+    elif context.get("vehicle_id"):
+        reference = "the mock item reference"
+    rows: list[dict[str, Any]] = []
+    speaker_sequence = _transcript_speaker_sequence(metadata, max(1, target_turns))
+    turn_plan = [row for row in metadata.get("turn_plan") or [] if isinstance(row, dict)]
+    speaker_roles = {str(key): str(value) for key, value in dict(metadata.get("speaker_roles") or {}).items()}
+    speaker_occurrences: dict[str, int] = {}
+    for idx in range(max(1, target_turns)):
+        speaker = speaker_sequence[idx]
+        occurrence = speaker_occurrences.get(speaker, 0)
+        speaker_occurrences[speaker] = occurrence + 1
+        intent = (
+            str(turn_plan[idx % len(turn_plan)].get("intent") or "")
+            if turn_plan
+            else _transcript_turn_goal(idx, target_turns)
+        )
+        if re.fullmatch(r"speaker_\d+", speaker.strip().lower()):
+            role = "customer" if idx % 2 == 0 else "agent"
+        else:
+            role = (
+                str(turn_plan[idx % len(turn_plan)].get("role") or "")
+                if turn_plan
+                else speaker_roles.get(speaker, "")
+            )
+            role = role or speaker_roles.get(speaker) or ("customer" if idx % 2 == 0 else "agent")
+        display_speaker = _friendly_transcript_speaker(speaker, role, idx)
+        if display_speaker in {"Customer", "Agent"}:
+            role = display_speaker.lower()
+        rows.append(
+            {
+                "turn": idx + 1,
+                "speaker": display_speaker,
+                "source_speaker_key": speaker,
+                "speaker_role": role,
+                "speaker_occurrence": occurrence + 1,
+                "conversation_phase": _transcript_conversation_phase(idx, target_turns),
+                "topic_terms": ", ".join(topic_terms[:6]) or "customer support",
+                "conversation_topic": topic,
+                "issue_type": _label_from_token(str(support_context.get("issue_type") or "customer_support_request")),
+                "issue_summary": str(support_context.get("issue_summary") or "").strip(),
+                "domain": context.get("domain") or "customer_support",
+                "source_locale": context.get("source_locale") or "en_US",
+                "target_locale": str(context.get("target_locale") or context.get("source_locale") or "en_US"),
+                "target_persona": str(context.get("target_persona") or _transcript_persona_for_role(role)),
+                "source_turn_hashes_json": source_turn_hashes_json,
+                "source_ngram_hashes_json": source_ngram_hashes_json,
+                "customer_name": "the mock customer" if context.get("customer_name") else "",
+                "reference": reference,
+                "message_goal": intent,
+                "seed": int(seed or 0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _transcript_support_context(metadata: dict[str, Any]) -> dict[str, Any]:
+    ssot = metadata.get("structured_ssot")
+    if not isinstance(ssot, dict):
+        return {}
+    support_context = ssot.get("support_context")
+    return dict(support_context) if isinstance(support_context, dict) else {}
+
+
+def _transcript_generation_topic_terms(support_context: dict[str, Any], metadata: dict[str, Any]) -> list[str]:
+    terms = _split_topic_terms(support_context.get("topic_terms"))
+    if not terms:
+        terms = [str(term).strip() for term in metadata.get("topic_terms") or [] if str(term).strip()]
+    if not terms:
+        issue_type = _label_from_token(str(support_context.get("issue_type") or "customer_support_request"))
+        terms = [issue_type]
+    return terms
+
+
+def _split_topic_terms(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [item.strip() for item in re.split(r"[,;\n]+", text) if item.strip()]
+
+
+def _label_from_token(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").replace("_", " ").replace("-", " ")).strip()
+
+
+def _transcript_speaker_sequence(metadata: dict[str, Any], target_turns: int) -> list[str]:
+    source_sequence = [str(value) for value in metadata.get("speaker_sequence") or [] if str(value).strip()]
+    if source_sequence:
+        labels = set(source_sequence)
+        if labels and labels <= {"Customer", "Agent"}:
+            first = source_sequence[0] if source_sequence[0] in {"Customer", "Agent"} else "Customer"
+            second = "Agent" if first == "Customer" else "Customer"
+            return [first if idx % 2 == 0 else second for idx in range(max(1, target_turns))]
+        return [source_sequence[idx % len(source_sequence)] for idx in range(max(1, target_turns))]
+    return ["Customer" if idx % 2 == 0 else "Agent" for idx in range(max(1, target_turns))]
+
+
+def _friendly_transcript_speaker(speaker: str, role: str, index: int) -> str:
+    normalized = str(speaker or "").strip()
+    lower = normalized.lower()
+    if lower in {"customer", "caller", "client", "member", "patient"}:
+        return "Customer"
+    if lower in {"agent, representative", "agent", "support", "specialist", "supervisor"}:
+        return "Agent" if lower != "supervisor" else "Supervisor"
+    role_lower = str(role or "").strip().lower()
+    if role_lower == "customer":
+        return "Customer"
+    if role_lower == "agent":
+        return "Agent"
+    return f"Participant {index + 1}"
+
+
+def _transcript_conversation_topic(topic_terms: list[str], *, support_context: dict[str, Any] | None = None) -> str:
+    support_context = support_context or {}
+    summary = str(support_context.get("issue_summary") or "").strip()
+    if summary:
+        return summary
+    issue_type = _label_from_token(str(support_context.get("issue_type") or ""))
+    if issue_type:
+        return issue_type
+    useful = [str(term).replace("_", " ").strip().lower() for term in topic_terms if str(term).strip()]
+    return ", ".join(useful[:4]) or "customer support request"
+
+
+def _transcript_persona_for_role(role: str) -> str:
+    role = str(role or "").strip().lower()
+    if role == "agent":
+        return "professional support representative"
+    if role == "customer":
+        return "customer requesting help"
+    return "support conversation participant"
+
+
+def _transcript_conversation_phase(index: int, target_turns: int) -> str:
+    if index == 0:
+        return "opening"
+    if index >= max(0, target_turns - 2):
+        return "closing"
+    if index < max(2, target_turns // 3):
+        return "discovery"
+    return "resolution"
+
+
+def _transcript_turn_goal(index: int, target_turns: int) -> str:
+    if index == 0:
+        return "customer opens the issue"
+    if index == 1:
+        return "agent acknowledges and starts helping"
+    if index >= target_turns - 2:
+        return "resolve or confirm next step"
+    return "progress the support conversation"
+
+
+def _transcript_turn_prompt() -> str:
+    return (
+        "Create one synthetic transcript message.\n"
+        "Turn: {{ turn }}\n"
+        "Speaker: {{ speaker }}\n"
+        "Speaker role: {{ speaker_role }}\n"
+        "Speaker occurrence: {{ speaker_occurrence }}\n"
+        "Conversation phase: {{ conversation_phase }}\n"
+        "Issue type: {{ issue_type }}\n"
+        "Issue summary: {{ issue_summary }}\n"
+        "Conversation topic: {{ conversation_topic }}\n"
+        "Grounding terms: {{ topic_terms }}\n"
+        "Domain: {{ domain }}\n"
+        "Source locale: {{ source_locale }}\n"
+        "Target locale: {{ target_locale }}\n"
+        "Target persona: {{ target_persona }}\n"
+        "Synthetic customer name, if any: {{ customer_name }}\n"
+        "Synthetic reference: {{ reference }}\n"
+        "Message goal: {{ message_goal }}\n"
+        "Write one natural, concise message for this speaker and turn role. "
+        "Use the target locale exactly; if source locale and target locale match, do not translate. "
+        "Preserve the support flow described by the structured SSOT issue summary and grounding terms. "
+        "If speaker role is customer, write as the person requesting help. "
+        "If speaker role is agent, write as the support representative helping the customer. "
+        "Do not copy source text. "
+        "Do not include phone numbers, emails, account numbers, markdown, labels, or JSON."
+    )
+
+
+def _transcript_rows_from_data_designer(dataset: Any, seed_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    frame = _data_designer_dataset_to_frame(dataset, "transcript")
+    if frame.empty:
+        raise RuntimeError("NeMo Data Designer returned no transcript records.")
+    if "synthetic_message" not in frame.columns:
+        raise RuntimeError("NeMo Data Designer transcript output missing `synthetic_message` column.")
+
+    rows: list[dict[str, Any]] = []
+    seed_records = seed_frame.to_dict(orient="records")
+    for idx, record in enumerate(frame.to_dict(orient="records")):
+        seed_record = seed_records[idx] if idx < len(seed_records) else {}
+        validation = record.get("synthetic_message_validation")
+        if not _data_designer_validation_passed(validation):
+            raise RuntimeError(
+                "NeMo Data Designer transcript message failed SDK validation: "
+                f"{_data_designer_validation_error(validation)}"
+            )
+        text = _clean_transcript_message(record.get("synthetic_message"))
+        if not text:
+            continue
+        rows.append(
+            {
+                "turn": int(record.get("turn") or seed_record.get("turn") or idx + 1),
+                "speaker": str(record.get("speaker") or seed_record.get("speaker") or ("Customer" if idx % 2 == 0 else "Agent")),
+                "timestamp": "",
+                "text": text,
+            }
+        )
+    _validate_transcript_row_batch_quality(rows, expected_rows=len(seed_records))
+    return rows
+
+
+def _validate_transcript_row_batch_quality(rows: list[dict[str, Any]], *, expected_rows: int) -> None:
+    if len(rows) != expected_rows:
+        raise RuntimeError(
+            "NeMo Data Designer transcript batch failed SDK validation: "
+            f"generated {len(rows)} usable records for {expected_rows} requested records"
+        )
+    used_texts: list[str] = []
+    for row in rows:
+        text = str(row.get("text") or "").strip()
+        if _is_repetitive_transcript_text(text, used_texts):
+            raise RuntimeError("NeMo Data Designer transcript batch failed SDK validation: repeated_message")
+        used_texts.append(text)
+
+
+def _is_source_replay_transcript_text(text: str, seed_record: dict[str, Any]) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    if not normalized:
+        return True
+    if _transcript_text_hash(normalized) in _hashes_from_seed_record(seed_record, "source_turn_hashes_json"):
+        return True
+    words = re.findall(r"\b[A-Za-z][A-Za-z\-]{2,}\b", normalized.lower())
+    if len(words) < 5:
+        return False
+    source_ngram_hashes = _hashes_from_seed_record(seed_record, "source_ngram_hashes_json")
+    return any(
+        _transcript_text_hash(" ".join(words[idx : idx + 5])) in source_ngram_hashes
+        for idx in range(0, len(words) - 4)
+    )
+
+
+def _hashes_from_seed_record(seed_record: dict[str, Any], key: str) -> set[str]:
+    value = seed_record.get(key)
+    if isinstance(value, set):
+        return {str(item) for item in value}
+    if isinstance(value, list):
+        return {str(item) for item in value}
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except json.JSONDecodeError:
+        return set()
+    return {str(item) for item in parsed} if isinstance(parsed, list) else set()
+
+
+def _transcript_text_hash(value: str) -> str:
+    return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()
+
+
+def _is_repetitive_transcript_text(text: str, used_texts: list[str]) -> bool:
+    if not text:
+        return True
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    for existing in used_texts:
+        other = re.sub(r"\s+", " ", existing.strip().lower())
+        if normalized == other:
+            return True
+        if SequenceMatcher(None, normalized, other).ratio() >= 0.85:
+            return True
+    return False
+
+
+def _text_conflicts_with_transcript_role(text: str, *, speaker: str, role: str) -> bool:
+    lower = text.lower()
+    speaker_lower = speaker.lower()
+    is_agent = role == "agent" or speaker_lower == "agent"
+    is_customer = role == "customer" or speaker_lower == "customer"
+
+    support_action_start = re.match(
+        r"^\s*(?:i\s+(?:can|will|am|have)|i'll|let\s+me|we\s+can|give\s+me)\b",
+        lower,
+    )
+    first_person_problem = re.search(
+        r"\b(?:my\s+\w+|i(?:'m| am| have|'ve)\s+(?:having|seeing|getting|unable|trying|concerned|worried|charged|missing|locked|stuck))\b",
+        lower,
+    )
+    asks_for_help = re.search(
+        r"\b(?:can|could|please|help|check|investigate|explain|confirm|why|issue|problem)\b",
+        lower,
+    )
+    if is_customer and support_action_start:
+        return True
+    if is_agent and first_person_problem and asks_for_help and not support_action_start:
+        return True
+    if is_agent and lower.startswith("agent,"):
+        return True
+    return False
+
+
+def _data_designer_dataset_to_frame(dataset: Any, workflow: str) -> pd.DataFrame:
+    if hasattr(dataset, "to_pandas"):
+        return dataset.to_pandas()
+    if isinstance(dataset, pd.DataFrame):
+        return dataset
+    if isinstance(dataset, list):
+        return pd.DataFrame(dataset)
+    if isinstance(dataset, dict):
+        return pd.DataFrame(dataset)
+    raise RuntimeError(f"Unsupported NeMo Data Designer {workflow} preview response shape.")
+
+
+def _clean_transcript_message(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^```(?:text|json)?\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s*```$", "", text).strip()
+    text = text.splitlines()[0].strip() if "\n" in text else text
+    return text.strip("\"' ,")
+
+
+def _validate_data_designer_transcript_messages(frame: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame(
+        [_validate_data_designer_transcript_message(row) for row in frame.to_dict(orient="records")]
+    )
+
+
+def _validate_data_designer_transcript_message(value: Any) -> dict[str, Any]:
+    row = value if isinstance(value, dict) else {"synthetic_message": value}
+    text = str(row.get("synthetic_message") or "").strip()
+    reasons: list[str] = []
+    if not text or len(text.split()) < 3:
+        reasons.append("message_too_short")
+    lower = text.lower()
+    blocked_fragments = (
+        "speaker:",
+        "speaker_",
+        "company name",
+        "[company",
+        "{company",
+        "conversation phase",
+        "message goal",
+        "speaking as",
+        "as a customer",
+        "as an agent",
+    )
+    if any(fragment in lower for fragment in blocked_fragments):
+        reasons.append("contains_generation_scaffold")
+    if re.search(r"\b(?:speaker|participant)\s+\w+\s+says\b", text, flags=re.IGNORECASE):
+        reasons.append("contains_speaker_narration")
+    if re.fullmatch(r"(?:speaker|participant)\s*[:#-]?\s*[\w -]+\.?", text, flags=re.IGNORECASE):
+        reasons.append("label_only_message")
+    if re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", text):
+        reasons.append("contains_email")
+    if re.search(r"\b(?:\+?\d[\d\s().-]{7,}\d)\b", text):
+        reasons.append("contains_phone_or_identifier")
+    speaker = str(row.get("speaker") or "")
+    role = str(row.get("speaker_role") or "").lower()
+    if _text_conflicts_with_transcript_role(text, speaker=speaker, role=role):
+        reasons.append("speaker_role_conflict")
+    if _is_source_replay_transcript_text(text, row):
+        reasons.append("source_replay")
+    return {
+        "is_valid": not reasons,
+        "error_messages": ";".join(reasons),
+    }
+
+
+def _data_designer_validation_passed(value: Any) -> bool:
+    if isinstance(value, dict):
+        return bool(value.get("is_valid"))
+    return False
+
+
+def _data_designer_validation_error(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("error_messages") or "invalid_message")
+    return "missing_validation_result"
+
+
 def _transcript_data_designer_seed(contract: CanonicalContract, turn_count: int) -> str:
     entity = contract.entities[0] if contract.entities else None
     metadata = dict(entity.metadata if entity else {})
@@ -592,7 +1299,7 @@ def _transcript_data_designer_inline_prompt(contract: CanonicalContract, turn_co
     )
 
 
-def _transcript_json_schema() -> dict[str, Any]:
+def _transcript_json_schema(target_turns: int | None = None) -> dict[str, Any]:
     turn = {
         "type": "object",
         "properties": {
@@ -604,13 +1311,17 @@ def _transcript_json_schema() -> dict[str, Any]:
         "required": ["turn", "speaker", "text"],
         "additionalProperties": False,
     }
+    turns_schema: dict[str, Any] = {
+        "type": "array",
+        "items": turn,
+    }
+    if target_turns is not None:
+        turns_schema["minItems"] = int(target_turns)
+        turns_schema["maxItems"] = int(target_turns)
     return {
         "type": "object",
         "properties": {
-            "turns": {
-                "type": "array",
-                "items": turn,
-            }
+            "turns": turns_schema,
         },
         "required": ["turns"],
         "additionalProperties": False,
@@ -663,32 +1374,21 @@ def _mock_data_designer_transcript(
     turn_count: int | None,
     seed: int | None,
 ) -> list[dict[str, Any]]:
-    total = int(turn_count or _contract_turn_count(contract) or 6)
-    entity = contract.entities[0] if contract.entities else None
-    metadata = entity.metadata if entity else {}
-    context = dict(metadata.get("synthetic_context") or {})
-    topic_terms = [str(term) for term in metadata.get("topic_terms") or []]
-    topic = " ".join(topic_terms[:2]) or "support request"
-    customer_name = context.get("customer_name") or f"Customer {int(seed or 0) % 1000:03d}"
-    reference = context.get("claim_id") or context.get("policy_id") or context.get("tracking_id") or "case reference"
-    contact = " or ".join(str(value) for value in (context.get("email"), context.get("phone")) if value)
-    dob = context.get("date_of_birth")
-    templates = [
-        f"Hi, I need help with the synthetic {topic}.",
-        f"I can help, {customer_name}. I have opened {reference}.",
-        f"Please use {contact} for follow up." if contact else "Can you confirm the next step for this request?",
-        "The next step is recorded in the synthetic case notes.",
-        f"Thanks. My synthetic date of birth is {dob}." if dob else "Thanks, that gives me what I need.",
-        "You are welcome. The update is ready for review.",
-    ]
+    rows = generate_synthetic_transcript(
+        contract,
+        turn_count=int(turn_count or _contract_turn_count(contract) or 6),
+        seed=seed,
+    )
     return [
         {
-            "turn": idx + 1,
-            "speaker": "Customer" if idx % 2 == 0 else "Agent",
-            "timestamp": "",
-            "text": templates[idx % len(templates)],
+            **row,
+            "speaker": _friendly_transcript_speaker(
+                str(row.get("speaker") or ""),
+                "customer" if idx % 2 == 0 else "agent",
+                idx,
+            ),
         }
-        for idx in range(max(1, total))
+        for idx, row in enumerate(rows)
     ]
 
 
@@ -756,33 +1456,15 @@ def _generate_database_with_data_designer(
     if util.find_spec("data_designer") is None:
         raise RuntimeError("Database Data Designer generation requires the standalone data-designer package.")
     try:
-        import data_designer.config as dd
-        from data_designer.interface import DataDesigner
+        dd, DataDesigner = load_data_designer_sdk()
     except ImportError as exc:
         raise RuntimeError("Data Designer standalone SDK is not importable.") from exc
 
-    model_id = os.getenv("SP_NEMO_DATA_DESIGNER_MODEL", "local/slm")
-    model_provider = os.getenv("SP_NEMO_DATA_DESIGNER_PROVIDER", "internal")
-    provider_endpoint = _data_designer_endpoint()
-    runtime = DataDesignerRuntime(
-        model_id=model_id,
-        provider=model_provider,
-        endpoint=provider_endpoint,
-        api_key_env=_data_designer_api_key_env(),
-        model_family="open_source_slm",
-    )
+    runtime = resolve_platform_slm_runtime()
     _require_data_designer_api_key(runtime)
+    preflight_slm_endpoint(runtime)
     model_alias = "database-row-generator"
-    data_designer = DataDesigner(
-        model_providers=[
-            dd.ModelProvider(
-                name=model_provider,
-                endpoint=provider_endpoint,
-                provider_type="openai",
-                api_key=_data_designer_model_provider_api_key(runtime),
-            )
-        ]
-    )
+    data_designer = DataDesigner(model_providers=[build_data_designer_provider(dd, runtime)])
     graph = _database_schema_graph(contract)
     tables: dict[str, pd.DataFrame] = {}
     for table_name in graph["generation_order"]:
@@ -800,16 +1482,16 @@ def _generate_database_with_data_designer(
         ]
     )
         prompt = _database_data_designer_prompt()
-        model_config = dd.ModelConfig(
-            alias=model_alias,
-            model=model_id,
-            provider=model_provider,
-            inference_parameters=dd.ChatCompletionInferenceParams(
-                temperature=float(os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.35")),
-                top_p=float(os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.9")),
-                max_tokens=int(os.getenv("SP_NEMO_DATA_DESIGNER_MAX_TOKENS", "4096")),
-                extra_body=_data_designer_chat_extra_body(runtime),
-            ),
+        model_config = build_data_designer_model_config(
+            dd,
+            model_alias,
+            workflow="database-row-generation",
+            runtime=runtime,
+            temperature=float(os.getenv("SP_DATABASE_DATA_DESIGNER_TEMPERATURE", os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.35"))),
+            top_p=float(os.getenv("SP_DATABASE_DATA_DESIGNER_TOP_P", os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.9"))),
+            timeout_env="SP_DATABASE_DATA_DESIGNER_TIMEOUT",
+            parallel_env="SP_DATABASE_DATA_DESIGNER_MAX_PARALLEL_REQUESTS",
+            extra_body=_data_designer_chat_extra_body(runtime),
         )
         builder = dd.DataDesignerConfigBuilder(model_configs=[model_config])
         builder.with_seed_dataset(dd.DataFrameSeedSource(df=seed_frame))
@@ -1101,49 +1783,32 @@ def _generate_schema_with_data_designer(
     if util.find_spec("data_designer") is None:
         raise RuntimeError("Schema Data Designer generation requires the standalone data-designer package.")
     try:
-        import data_designer.config as dd
-        from data_designer.interface import DataDesigner
+        dd, DataDesigner = load_data_designer_sdk()
     except ImportError as exc:
         raise RuntimeError("Data Designer standalone SDK is not importable.") from exc
 
-    model_id = os.getenv("SP_NEMO_DATA_DESIGNER_MODEL", "local/slm")
-    model_provider = os.getenv("SP_NEMO_DATA_DESIGNER_PROVIDER", "internal")
-    provider_endpoint = _data_designer_endpoint()
-    runtime = DataDesignerRuntime(
-        model_id=model_id,
-        provider=model_provider,
-        endpoint=provider_endpoint,
-        api_key_env=_data_designer_api_key_env(),
-        model_family="open_source_slm",
-    )
+    runtime = resolve_platform_slm_runtime()
     _require_data_designer_api_key(runtime)
+    preflight_slm_endpoint(runtime)
     skip_health_check = _data_designer_skip_health_check()
     model_alias = "schema-row-generator"
     metadata: dict[str, Any] = {
         "backend": "nemo",
         "data_designer": {
             "backend_name": "data-designer",
-            "model": model_id,
-            "provider": model_provider,
-            "provider_endpoint": provider_endpoint,
+            "model": runtime.model_id,
+            "provider": runtime.provider,
+            "provider_endpoint": runtime.endpoint,
             "model_alias": model_alias,
             "skip_health_check": skip_health_check,
             "row_count_repairs": [],
         },
     }
-    data_designer = DataDesigner(
-        model_providers=[
-            dd.ModelProvider(
-                name=model_provider,
-                endpoint=provider_endpoint,
-                provider_type="openai",
-                api_key=_data_designer_model_provider_api_key(runtime),
-            )
-        ]
-    )
+    data_designer = DataDesigner(model_providers=[build_data_designer_provider(dd, runtime)])
+    schema_tables_by_name = {table.name: table for table in schema.tables}
     tables: dict[str, pd.DataFrame] = {}
-    for table in schema.tables:
-        table_name = table.name
+    for table_name in _schema_generation_order(schema):
+        table = schema_tables_by_name[table_name]
         count = int(table_row_counts.get(table_name) or row_count)
         seed_frame = pd.DataFrame(
             [
@@ -1152,26 +1817,23 @@ def _generate_schema_with_data_designer(
                     "row_count": count,
                     "column_contract_json": _schema_column_contract_json(schema, table_name),
                     "relationships_json": _schema_relationships_json(schema, table_name),
-                    "parent_rows_json": json.dumps(
-                        {name: frame.head(20).to_dict(orient="records") for name, frame in tables.items()},
-                        default=str,
-                    ),
+                    "parent_rows_json": _schema_parent_key_context(schema, table_name, tables),
                     "user_prompt": _data_designer_user_prompt(),
                 }
             ]
         )
         prompt = _schema_data_designer_prompt()
-        model_config = dd.ModelConfig(
-            alias=model_alias,
-            model=model_id,
-            provider=model_provider,
+        model_config = build_data_designer_model_config(
+            dd,
+            model_alias,
+            workflow="schema-row-generation",
+            runtime=runtime,
+            temperature=float(os.getenv("SP_SCHEMA_DATA_DESIGNER_TEMPERATURE", os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.35"))),
+            top_p=float(os.getenv("SP_SCHEMA_DATA_DESIGNER_TOP_P", os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.9"))),
+            timeout_env="SP_SCHEMA_DATA_DESIGNER_TIMEOUT",
+            parallel_env="SP_SCHEMA_DATA_DESIGNER_MAX_PARALLEL_REQUESTS",
+            extra_body=_data_designer_chat_extra_body(runtime),
             skip_health_check=skip_health_check,
-            inference_parameters=dd.ChatCompletionInferenceParams(
-                temperature=float(os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.35")),
-                top_p=float(os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.9")),
-                max_tokens=int(os.getenv("SP_NEMO_DATA_DESIGNER_MAX_TOKENS", "4096")),
-                extra_body=_data_designer_chat_extra_body(runtime),
-            ),
         )
         builder = dd.DataDesignerConfigBuilder(model_configs=[model_config])
         builder.with_seed_dataset(dd.DataFrameSeedSource(df=seed_frame))
@@ -1192,7 +1854,13 @@ def _generate_schema_with_data_designer(
             dataset = getattr(preview, "dataset", preview)
             value = _extract_data_designer_value(dataset, "rows_json")
             raw_value = str(value)
-            rows = _parse_schema_rows_json(raw_value, table_name=table_name, expected_count=count, metadata=metadata)
+            rows = _parse_schema_rows_json(
+                raw_value,
+                table_name=table_name,
+                expected_count=count,
+                column_names=[col.name for col in schema.columns.get(table_name, []) or []],
+                metadata=metadata,
+            )
         except NemoSchemaGenerationError:
             raise
         except Exception as exc:
@@ -1203,8 +1871,59 @@ def _generate_schema_with_data_designer(
                 raw_value=raw_value,
             ) from exc
         frame = pd.DataFrame(rows)
-        tables[table_name] = _coerce_schema_frame(schema, table_name, frame, count=count, metadata=metadata)
+        tables[table_name] = _coerce_schema_frame(
+            schema,
+            table_name,
+            frame,
+            count=count,
+            parent_tables=tables,
+            metadata=metadata,
+        )
     return tables, metadata
+
+
+def _schema_parent_key_context(schema: Any, table_name: str, parent_tables: dict[str, pd.DataFrame]) -> str:
+    context: dict[str, Any] = {}
+    for rel in getattr(schema, "relationships", []) or []:
+        if rel.child_table != table_name:
+            continue
+        parent_frame = parent_tables.get(rel.parent_table)
+        if parent_frame is None or rel.parent_key not in parent_frame.columns:
+            continue
+        context[f"{rel.parent_table}.{rel.parent_key}"] = (
+            parent_frame[rel.parent_key].dropna().astype(str).head(10).tolist()
+        )
+    return json.dumps(context, default=str)
+
+
+def _schema_generation_order(schema: Any) -> list[str]:
+    """Return schema tables with FK parents before children."""
+    from collections import defaultdict, deque
+
+    table_names = [table.name for table in schema.tables]
+    known = set(table_names)
+    graph: dict[str, list[str]] = defaultdict(list)
+    in_degree = {name: 0 for name in table_names}
+    for rel in getattr(schema, "relationships", []) or []:
+        parent = getattr(rel, "parent_table", None)
+        child = getattr(rel, "child_table", None)
+        if parent not in known or child not in known or parent == child:
+            continue
+        graph[parent].append(child)
+        in_degree[child] += 1
+
+    ready = deque(name for name in table_names if in_degree[name] == 0)
+    ordered: list[str] = []
+    while ready:
+        table_name = ready.popleft()
+        ordered.append(table_name)
+        for child in graph[table_name]:
+            in_degree[child] -= 1
+            if in_degree[child] == 0:
+                ready.append(child)
+    if len(ordered) != len(table_names):
+        return table_names
+    return ordered
 
 
 def _deterministic_schema_tables(
@@ -1217,7 +1936,9 @@ def _deterministic_schema_tables(
 ) -> dict[str, pd.DataFrame]:
     tables: dict[str, pd.DataFrame] = {}
     relationships = list(getattr(schema, "relationships", []) or [])
-    for table in schema.tables:
+    schema_tables_by_name = {table.name: table for table in schema.tables}
+    for table_name in _schema_generation_order(schema):
+        table = schema_tables_by_name[table_name]
         table_name = table.name
         count = int(table_row_counts.get(table_name) or row_count)
         rows: list[dict[str, Any]] = []
@@ -1229,17 +1950,21 @@ def _deterministic_schema_tables(
                 if rel and rel.parent_table in tables and rel.parent_key in tables[rel.parent_table]:
                     parent_values = tables[rel.parent_table][rel.parent_key].tolist()
                     row[col.name] = parent_values[idx % len(parent_values)]
+                elif str(getattr(col, "type", "text")) == "uuid":
+                    row[col.name] = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{text_prefix}.{table_name}.{col.name}.{seed}.{idx}"))
                 elif getattr(col, "unique", False):
                     row[col.name] = idx + 1
                 else:
-                    row[col.name] = _schema_cell_value(col, idx=idx, seed=seed, prefix=text_prefix)
+                    row[col.name] = _schema_cell_value(col, table_name=table_name, idx=idx, seed=seed, prefix=text_prefix)
             rows.append(row)
         tables[table_name] = pd.DataFrame(rows)
     return tables
 
 
-def _schema_cell_value(col: Any, *, idx: int, seed: int, prefix: str) -> Any:
+def _schema_cell_value(col: Any, *, table_name: str, idx: int, seed: int, prefix: str) -> Any:
     col_type = getattr(col, "type", "text")
+    col_name = str(getattr(col, "name", "value") or "value")
+    normalized_name = col_name.lower()
     params = dict(getattr(col, "distribution_params", {}) or {})
     if col_type in {"int", "foreign_key"}:
         return idx + 1
@@ -1248,13 +1973,68 @@ def _schema_cell_value(col: Any, *, idx: int, seed: int, prefix: str) -> Any:
     if col_type in {"date", "datetime"}:
         return f"2024-01-{(idx % 28) + 1:02d}"
     if col_type == "email":
-        return f"{prefix}_{idx + 1}@example.com"
+        return f"{_schema_entity_slug(table_name)}{idx + 1:03d}@example.com"
+    if col_type == "phone":
+        return f"+1-555-01{idx % 100:02d}"
+    if col_type == "url":
+        return f"https://example.com/{_schema_entity_slug(table_name)}/{idx + 1:03d}"
+    if col_type == "address":
+        streets = ["100 Main St", "250 Market Ave", "42 Center Rd", "808 North Pkwy"]
+        return streets[(idx + seed) % len(streets)]
     if col_type == "boolean":
         return (idx + seed) % 2 == 0
     if col_type == "categorical":
         choices = list(params.get("choices") or ["new", "active", "closed"])
-        return choices[idx % len(choices)]
-    return f"{prefix}_{col.name}_{idx + 1}"
+        probabilities = _schema_category_probabilities(params, len(choices))
+        if probabilities is None:
+            return choices[idx % len(choices)]
+        return choices[_schema_weighted_choice_index(probabilities, idx=idx, seed=seed)]
+    if normalized_name in {"name", "full_name"} or normalized_name.endswith("_name"):
+        return f"{_schema_entity_label(table_name)} {idx + 1:03d}"
+    if "description" in normalized_name or "notes" in normalized_name:
+        return f"{_schema_entity_label(table_name)} synthetic note {idx + 1:03d}"
+    if normalized_name in {"city", "town"}:
+        return ["Phoenix", "Austin", "Denver", "Raleigh"][(idx + seed) % 4]
+    if normalized_name in {"state", "region"}:
+        return ["AZ", "TX", "CO", "NC"][(idx + seed) % 4]
+    if normalized_name in {"specialty", "department"}:
+        return ["Primary Care", "Scheduling", "Billing", "Operations"][(idx + seed) % 4]
+    if normalized_name in {"code", "reference", "reference_number"} or normalized_name.endswith("_code"):
+        return f"{_schema_entity_slug(table_name).upper()}-{idx + 1:04d}"
+    return f"{_schema_entity_label(table_name)} {col_name.replace('_', ' ')} {idx + 1:03d}"
+
+
+def _schema_entity_label(table_name: str) -> str:
+    value = str(table_name or "record").replace("_", " ").strip()
+    if value.endswith("ies"):
+        value = value[:-3] + "y"
+    elif value.endswith("s"):
+        value = value[:-1]
+    return value.title() or "Record"
+
+
+def _schema_entity_slug(table_name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _schema_entity_label(table_name).lower()) or "record"
+
+
+def _schema_category_probabilities(params: dict[str, Any], choice_count: int) -> list[float] | None:
+    weights = params.get("weights") or params.get("probabilities")
+    if not isinstance(weights, list) or len(weights) != choice_count:
+        return None
+    total = sum(float(weight) for weight in weights)
+    if total <= 0:
+        return None
+    return [float(weight) / total for weight in weights]
+
+
+def _schema_weighted_choice_index(probabilities: list[float], *, idx: int, seed: int) -> int:
+    slot = ((idx * 37 + seed * 17) % 1000) / 1000.0
+    cumulative = 0.0
+    for index, probability in enumerate(probabilities):
+        cumulative += probability
+        if slot <= cumulative:
+            return index
+    return len(probabilities) - 1
 
 
 def _schema_column_contract_json(schema: Any, table_name: str) -> str:
@@ -1288,9 +2068,12 @@ def _schema_data_designer_prompt() -> str:
         "Relationships: {{ relationships_json }}\n"
         "Previously generated parent table samples: {{ parent_rows_json }}\n"
         "Preserve primary-key uniqueness, foreign-key validity, non-null constraints, and column names.\n"
-        "Return strict JSON only: a JSON array of exactly {{ row_count }} row objects. "
+        "Return strict JSON only: a JSON array of exactly {{ row_count }} row objects, not arrays. "
         "Before returning, count the array items. If row_count is 30, return exactly 30 objects, not 29 and not 31. "
         "Every object must contain every requested column exactly once. "
+        "Use realistic values for the column name and type. Credit scores must be between 300 and 850. "
+        "Money and transaction amounts must be non-negative. Percent/rate fields must be positive realistic decimals. "
+        "Foreign-key values must come from the provided parent table samples when available. "
         "Do not include Markdown, prose, comments, code fences, or wrapper objects."
     )
 
@@ -1300,6 +2083,7 @@ def _parse_schema_rows_json(
     *,
     table_name: str,
     expected_count: int,
+    column_names: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     text = value.strip()
@@ -1331,6 +2115,24 @@ def _parse_schema_rows_json(
             raw_value=value,
         )
     rows = [row for row in payload if isinstance(row, dict)]
+    if len(rows) != len(payload) and column_names and all(isinstance(row, list) for row in payload):
+        rows = [
+            {
+                name: row[index] if index < len(row) else None
+                for index, name in enumerate(column_names)
+            }
+            for row in payload
+        ]
+        if metadata is not None:
+            repairs = metadata.setdefault("data_designer", {}).setdefault("row_count_repairs", [])
+            repairs.append(
+                {
+                    "table": table_name,
+                    "requested_rows": int(expected_count),
+                    "returned_rows": len(rows),
+                    "action": "mapped_array_rows_to_objects",
+                }
+            )
     if len(rows) != len(payload):
         raise NemoSchemaGenerationError(
             f"Schema Data Designer rows_json for table {table_name!r} contains non-object rows.",
@@ -1386,6 +2188,7 @@ def _coerce_schema_frame(
     frame: pd.DataFrame,
     *,
     count: int,
+    parent_tables: dict[str, pd.DataFrame] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     columns = list(schema.columns.get(table_name, []) or [])
@@ -1395,20 +2198,96 @@ def _coerce_schema_frame(
             metadata=metadata,
         )
     frame = frame.head(count).copy()
+    parent_tables = parent_tables or {}
+    quality_repairs = metadata.setdefault("data_designer", {}).setdefault("quality_repairs", []) if metadata is not None else []
     for col in columns:
         if col.name not in frame.columns:
             raise NemoSchemaGenerationError(
                 f"Schema Data Designer output for table {table_name!r} is missing required column {col.name!r}.",
                 metadata=metadata,
             )
+        if not getattr(col, "nullable", False) and frame[col.name].isna().any():
+            frame[col.name] = [
+                value if pd.notna(value) and str(value).strip() else _schema_cell_value(col, idx=idx, seed=0, prefix=table_name)
+                for idx, value in enumerate(frame[col.name].tolist())
+            ]
+            quality_repairs.append({"table": table_name, "column": col.name, "action": "filled_non_null_values"})
         if getattr(col, "unique", False):
-            duplicated = frame[col.name].duplicated().any()
-            if duplicated:
-                raise NemoSchemaGenerationError(
-                    f"Schema Data Designer output for table {table_name!r} has duplicate values in unique column {col.name!r}.",
-                    metadata=metadata,
+            frame[col.name] = _repair_unique_column(frame[col.name], table_name=table_name, column_name=col.name)
+            quality_repairs.append({"table": table_name, "column": col.name, "action": "enforced_unique_values"})
+        rel = next(
+            (
+                relationship
+                for relationship in (getattr(schema, "relationships", []) or [])
+                if relationship.child_table == table_name and relationship.child_key == col.name
+            ),
+            None,
+        )
+        if rel is not None and rel.parent_table in parent_tables and rel.parent_key in parent_tables[rel.parent_table]:
+            parent_values = parent_tables[rel.parent_table][rel.parent_key].dropna().tolist()
+            if parent_values:
+                frame[col.name] = [parent_values[idx % len(parent_values)] for idx in range(len(frame))]
+                quality_repairs.append(
+                    {
+                        "table": table_name,
+                        "column": col.name,
+                        "action": "aligned_foreign_keys_to_parent_rows",
+                        "parent": f"{rel.parent_table}.{rel.parent_key}",
+                    }
                 )
+        frame[col.name] = _repair_schema_quality_values(frame[col.name], col, table_name=table_name)
     return frame[[col.name for col in columns]]
+
+
+def _repair_unique_column(series: pd.Series, *, table_name: str, column_name: str) -> list[Any]:
+    values: list[Any] = []
+    seen: set[str] = set()
+    for idx, value in enumerate(series.tolist()):
+        text = str(value).strip() if pd.notna(value) else ""
+        if not text or text in seen:
+            text = f"{table_name}_{column_name}_{idx + 1}"
+        while text in seen:
+            text = f"{table_name}_{column_name}_{idx + 1}_{len(seen)}"
+        seen.add(text)
+        values.append(text)
+    return values
+
+
+def _repair_schema_quality_values(series: pd.Series, col: Any, *, table_name: str) -> pd.Series:
+    name = str(getattr(col, "name", "")).lower()
+    col_type = str(getattr(col, "type", "text"))
+    if col_type == "uuid":
+        repaired = []
+        seen: set[str] = set()
+        for idx, value in enumerate(series.tolist()):
+            text = str(value).strip() if pd.notna(value) else ""
+            try:
+                repaired_uuid = str(uuid.UUID(text))
+            except (TypeError, ValueError, AttributeError):
+                repaired_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{table_name}.{name}.{idx}.{text}"))
+            while repaired_uuid in seen:
+                repaired_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{table_name}.{name}.{idx}.{len(seen)}"))
+            seen.add(repaired_uuid)
+            repaired.append(repaired_uuid)
+        return pd.Series(repaired, index=series.index)
+    if col_type in {"int", "float", "decimal", "money", "currency"}:
+        numeric = pd.to_numeric(series, errors="coerce")
+        if "credit_score" in name or name == "credit":
+            return numeric.fillna(650).clip(lower=300, upper=850).round().astype(int)
+        if any(token in name for token in ("amount", "balance", "total", "price", "usd")):
+            return numeric.fillna(0).clip(lower=0)
+        if any(token in name for token in ("interest", "rate", "percent")):
+            return numeric.fillna(5.0).clip(lower=0.1, upper=36.0)
+        return numeric.fillna(0 if col_type == "int" else 0.0)
+    if "email" in name:
+        repaired = []
+        for idx, value in enumerate(series.tolist()):
+            text = str(value).strip().lower() if pd.notna(value) else ""
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", text):
+                text = f"{table_name}_{idx + 1}@example.com"
+            repaired.append(text)
+        return pd.Series(repaired, index=series.index)
+    return series
 
 
 def _validate_schema_tables(schema: Any, tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
@@ -1426,6 +2305,14 @@ def _validate_schema_tables(schema: Any, tables: dict[str, pd.DataFrame]) -> dic
                 issues.append(f"{table.name}.{col.name}: null values in non-null column")
             if getattr(col, "unique", False) and frame[col.name].duplicated().any():
                 issues.append(f"{table.name}.{col.name}: duplicate values in unique column")
+            if str(getattr(col, "type", "text")) == "uuid":
+                invalid_uuid_count = sum(
+                    1
+                    for value in frame[col.name].dropna().tolist()
+                    if not _is_valid_uuid_value(value)
+                )
+                if invalid_uuid_count:
+                    issues.append(f"{table.name}.{col.name}: {invalid_uuid_count} invalid UUID value(s)")
     for rel in getattr(schema, "relationships", []) or []:
         parent = tables.get(rel.parent_table)
         child = tables.get(rel.child_table)
@@ -1442,6 +2329,14 @@ def _validate_schema_tables(schema: Any, tables: dict[str, pd.DataFrame]) -> dic
         "status": "passed" if not issues else "failed",
         "issues": issues,
     }
+
+
+def _is_valid_uuid_value(value: Any) -> bool:
+    try:
+        uuid.UUID(str(value).strip())
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return True
 
 
 def _generate_pdf_values_with_data_designer(
@@ -1464,61 +2359,57 @@ def _generate_pdf_values_with_data_designer(
     if util.find_spec("data_designer") is None:
         raise RuntimeError("PDF Data Designer generation requires the standalone data-designer package.")
     try:
-        import data_designer.config as dd
-        from data_designer.interface import DataDesigner
+        dd, DataDesigner = load_data_designer_sdk()
     except ImportError as exc:
         raise RuntimeError("Data Designer standalone SDK is not importable.") from exc
 
     runtime = _digital_twin_data_designer_runtime()
     _require_data_designer_api_key(runtime)
+    preflight_slm_endpoint(runtime)
     skip_health_check = _data_designer_skip_health_check()
     model_alias = "pdf-value-generator"
     prompt = _pdf_data_designer_prompt()
-    model_config = dd.ModelConfig(
-        alias=model_alias,
-        model=runtime.model_id,
-        provider=runtime.provider,
+    model_config = build_data_designer_model_config(
+        dd,
+        model_alias,
+        workflow="pdf-value-batch",
+        runtime=runtime,
+        temperature=float(os.getenv("SP_PDF_DATA_DESIGNER_TEMPERATURE", os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.2"))),
+        top_p=float(os.getenv("SP_PDF_DATA_DESIGNER_TOP_P", os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.8"))),
+        timeout_env="SP_PDF_DATA_DESIGNER_TIMEOUT",
+        parallel_env="SP_PDF_DATA_DESIGNER_MAX_PARALLEL_REQUESTS",
+        extra_body=_data_designer_chat_extra_body(runtime),
         skip_health_check=skip_health_check,
-        inference_parameters=dd.ChatCompletionInferenceParams(
-            temperature=float(os.getenv("SP_NEMO_DATA_DESIGNER_TEMPERATURE", "0.45")),
-            top_p=float(os.getenv("SP_NEMO_DATA_DESIGNER_TOP_P", "0.9")),
-            max_tokens=int(os.getenv("SP_NEMO_DATA_DESIGNER_MAX_TOKENS", "4096")),
-            extra_body=_data_designer_chat_extra_body(runtime),
-        ),
     )
-    data_designer = DataDesigner(
-        model_providers=[
-            dd.ModelProvider(
-                name=runtime.provider,
-                endpoint=runtime.endpoint,
-                provider_type="openai",
-                api_key=_data_designer_model_provider_api_key(runtime),
-            )
-        ]
-    )
+    data_designer = DataDesigner(model_providers=[build_data_designer_provider(dd, runtime)])
     merged_sdk_values: dict[str, Any] = {"values": {}}
     for chunk_index, plan_chunk in enumerate(_pdf_generation_plan_chunks(plan), start=1):
-        seed_frame = pd.DataFrame(
-            [
-                {
-                    "binding_plan_json": json.dumps(plan_chunk, default=str),
-                    "user_prompt": _data_designer_user_prompt(),
-                }
-            ]
-        )
+        seed_frame = _pdf_binding_seed_frame(plan_chunk)
         builder = dd.DataDesignerConfigBuilder(model_configs=[model_config])
         builder.with_seed_dataset(dd.DataFrameSeedSource(df=seed_frame))
         builder.add_column(
-            dd.LLMStructuredColumnConfig(
-                name="pdf_values_json",
+            dd.LLMTextColumnConfig(
+                name="synthetic_value",
                 prompt=prompt,
-                system_prompt="Return only valid JSON. No Markdown. No explanation.",
+                system_prompt=(
+                    "Return exactly one short replacement value. No explanation, JSON, Markdown, labels, "
+                    "or repeated binding metadata."
+                ),
                 model_alias=model_alias,
-                output_format=_pdf_values_json_schema(plan_chunk),
+            )
+        )
+        builder.add_column(
+            dd.ValidationColumnConfig(
+                name="synthetic_value_validation",
+                target_columns=["synthetic_value"],
+                validator_type=dd.ValidatorType.LOCAL_CALLABLE,
+                validator_params=dd.LocalCallableValidatorParams(
+                    validation_function=_validate_data_designer_pdf_values
+                ),
             )
         )
         try:
-            preview = data_designer.preview(builder, num_records=1)
+            preview = data_designer.preview(builder, num_records=len(seed_frame))
         except Exception as exc:
             chunk_size = len(plan_chunk.get("bindings") or [])
             raise RuntimeError(
@@ -1526,15 +2417,7 @@ def _generate_pdf_values_with_data_designer(
                 f"for binding batch {chunk_index} containing {chunk_size} bindings."
             ) from exc
         dataset = getattr(preview, "dataset", preview)
-        value = _extract_data_designer_value(dataset, "pdf_values_json")
-        sdk_values = _parse_pdf_values_json(value)
-        chunk_values = _pdf_values_by_binding_id(sdk_values)
-        if chunk_values is None:
-            raise RuntimeError(
-                "NeMo Data Designer PDF value generation must return a `values` object "
-                f"for binding batch {chunk_index}."
-            )
-        merged_sdk_values["values"].update(chunk_values)
+        merged_sdk_values["values"].update(_pdf_values_from_data_designer_rows(dataset, chunk_index))
     sdk_values = merged_sdk_values
     values = _coerce_pdf_values_from_sdk(template, binding_map, sdk_values)
     values["model_family"] = runtime.model_family
@@ -1621,7 +2504,7 @@ def _pdf_generation_plan_chunks(plan: dict[str, Any]) -> list[dict[str, Any]]:
     bindings = list(plan.get("bindings") or [])
     if not bindings:
         return [{"bindings": []}]
-    chunk_size = max(1, int(os.getenv("SP_PDF_DATA_DESIGNER_BINDINGS_PER_BATCH", "40")))
+    chunk_size = max(1, int(os.getenv("SP_PDF_DATA_DESIGNER_BINDINGS_PER_BATCH", "10")))
     return [{"bindings": bindings[index : index + chunk_size]} for index in range(0, len(bindings), chunk_size)]
 
 
@@ -1635,16 +2518,154 @@ def _pdf_inline_span_binding_id(region_id: str, span_index: int) -> str:
 
 def _pdf_data_designer_prompt() -> str:
     return (
-        "Generate privacy-safe synthetic replacement values for a PDF template.\n"
-        "User generation instructions: {{ user_prompt }}\n"
-        "Binding plan: {{ binding_plan_json }}\n"
-        "Return a compact JSON object with exactly one key: values.\n"
-        "values must be an object whose keys are binding_id values from the binding plan "
-        "and whose values are synthetic replacement strings.\n"
-        "Do not return arrays. Do not return nested table rows. Do not return region metadata. "
-        "Only include binding_id keys provided in the input. "
-        "Preserve meaning implied by labels and semantic roles. Do not include real PII."
+        "Generate one privacy-safe synthetic replacement value for a PDF binding.\n"
+        "General instructions: {{ user_prompt }}\n"
+        "Binding id: {{ binding_id }}\n"
+        "Binding type: {{ binding_type }}\n"
+        "Label: {{ label }}\n"
+        "Semantic role: {{ semantic_role }}\n"
+        "Generator strategy: {{ generator_strategy }}\n"
+        "Shape pattern: {{ shape_pattern }}\n"
+        "Value type: {{ value_type }}\n"
+        "Return only the replacement value as plain text, preferably under 80 characters. "
+        "Do not include JSON, Markdown, field labels, binding ids, explanations, or real personally "
+        "identifiable information."
     )
+
+
+def _pdf_binding_seed_frame(plan: dict[str, Any]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for binding in plan.get("bindings") or []:
+        row = dict(binding)
+        row["user_prompt"] = _data_designer_user_prompt()
+        for key in (
+            "binding_id",
+            "binding_type",
+            "label",
+            "semantic_role",
+            "generator_strategy",
+            "shape_pattern",
+            "value_type",
+        ):
+            value = row.get(key)
+            row[key] = "" if value is None else str(value)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _pdf_values_from_data_designer_rows(dataset: Any, chunk_index: int) -> dict[str, str]:
+    frame = _data_designer_dataset_to_frame(dataset, "PDF")
+    required = {"binding_id", "synthetic_value"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise RuntimeError(
+            "NeMo Data Designer PDF output missing required column(s) "
+            f"{missing} for binding batch {chunk_index}."
+        )
+    output: dict[str, str] = {}
+    for record in frame.to_dict(orient="records"):
+        validation = record.get("synthetic_value_validation")
+        if not _data_designer_validation_passed(validation):
+            detail = _data_designer_validation_error(validation) or record.get("synthetic_value")
+            raise RuntimeError(f"NeMo Data Designer PDF value failed SDK validation: {detail}")
+        binding_id = str(record.get("binding_id") or "").strip()
+        value = _repair_pdf_synthetic_value(record.get("synthetic_value"))
+        if not binding_id:
+            raise RuntimeError(f"NeMo Data Designer PDF output has an empty binding_id in batch {chunk_index}.")
+        if not value:
+            raise RuntimeError(f"NeMo Data Designer PDF output has an empty value for `{binding_id}`.")
+        output[binding_id] = value
+    return output
+
+
+def _validate_data_designer_pdf_values(frame: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame(
+        [_validate_data_designer_pdf_value(row.get("synthetic_value")) for row in frame.to_dict(orient="records")]
+    )
+
+
+def _validate_data_designer_pdf_value(value: Any) -> dict[str, Any]:
+    text = _repair_pdf_synthetic_value(value)
+    if not text:
+        return {"is_valid": False, "error_messages": "empty_pdf_replacement_value"}
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("binding id:", "semantic role:", "generator strategy:", "```")):
+        return {"is_valid": False, "error_messages": "contains_generation_scaffold"}
+    if len(text) > int(os.getenv("SP_PDF_DATA_DESIGNER_MAX_VALUE_CHARS", "240")):
+        return {"is_valid": False, "error_messages": "pdf_replacement_value_too_long"}
+    return {"is_valid": True, "error_messages": None}
+
+
+def _clean_pdf_synthetic_value(value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:text|json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    return " ".join(text.strip().strip('"').strip("'").split())
+
+
+def _repair_pdf_synthetic_value(value: Any) -> str:
+    """Extract one renderable PDF replacement value from a chatty local SLM reply."""
+    if isinstance(value, dict):
+        for key in ("value", "replacement_value", "synthetic_value", "text"):
+            if value.get(key) is not None:
+                return _repair_pdf_synthetic_value(value.get(key))
+    raw_text = "" if value is None else str(value).strip()
+    if raw_text.startswith("```"):
+        raw_text = re.sub(r"^```(?:text|json)?\s*", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\s*```$", "", raw_text)
+    if not raw_text:
+        return ""
+
+    text = _clean_pdf_synthetic_value(raw_text)
+    parsed = _parse_json_object_if_present(text)
+    if isinstance(parsed, dict):
+        for key in ("value", "replacement_value", "synthetic_value", "text"):
+            if parsed.get(key) is not None:
+                return _repair_pdf_synthetic_value(parsed.get(key))
+        values = parsed.get("values")
+        if isinstance(values, dict) and values:
+            return _repair_pdf_synthetic_value(next(iter(values.values())))
+
+    lines = [line.strip(" -:\t") for line in re.split(r"[\r\n]+", raw_text) if line.strip()]
+    for line in lines:
+        lowered = line.lower()
+        if any(marker in lowered for marker in ("binding id:", "semantic role:", "generator strategy:")):
+            continue
+        labelled = re.match(
+            r"^(?:replacement value|synthetic value|value|answer)\s*[:=]\s*(?P<value>.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if labelled:
+            return _clip_pdf_value(_clean_pdf_synthetic_value(labelled.group("value")))
+        if len(line) <= int(os.getenv("SP_PDF_DATA_DESIGNER_MAX_VALUE_CHARS", "240")):
+            return _clean_pdf_synthetic_value(line)
+    return _clip_pdf_value(text)
+
+
+def _parse_json_object_if_present(text: str) -> dict[str, Any] | None:
+    candidate = text
+    if not candidate.startswith("{"):
+        extracted = _extract_first_json_object(candidate)
+        if extracted is None:
+            return None
+        candidate = extracted
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _clip_pdf_value(text: str) -> str:
+    limit = int(os.getenv("SP_PDF_DATA_DESIGNER_MAX_VALUE_CHARS", "240"))
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rstrip()
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0].rstrip()
+    return clipped or text[:limit]
 
 
 def _pdf_values_json_schema(plan: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1911,3 +2932,4 @@ def _mock_data_designer_pdf_values(
         },
     }
     return _coerce_pdf_values_from_sdk(template, binding_map, sdk_values)
+

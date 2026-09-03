@@ -10,16 +10,21 @@ import tempfile
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlparse
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 import streamlit as st
 
 from synth_platform.application.workflows.schema_twin import (
+    generate_from_schema,
     load_schema_bytes,
+    package_download,
     schema_column_details,
     summarize_schema,
+    validation_highlights,
+)
+from synth_platform.application.workflows.schema_prompt_draft import (
+    draft_schema_from_prompt as draft_schema_from_prompt_workflow,
 )
 from synth_platform.interfaces.streamlit.components.common.ux import (
     measure_generation,
@@ -29,42 +34,37 @@ from synth_platform.interfaces.streamlit.components.common.ux import (
     step_header,
 )
 from synth_platform.interfaces.streamlit.ui_config import ui_step, ui_value
+from synth_platform.infrastructure.slm_runtime import (
+    apply_local_endpoint_network_policy,
+    data_designer_max_tokens,
+    data_designer_skip_health_check,
+    is_local_endpoint,
+    normalize_model_endpoint,
+    PlatformSLMRuntime,
+    preflight_slm_endpoint,
+    resolve_platform_slm_runtime,
+)
+from synth_platform.infrastructure.integrations.data_designer_provider import (
+    build_data_designer_model_config,
+    build_data_designer_provider,
+)
 from synth_platform.settings import Settings
 
 SETTINGS = Settings.from_env()
 SCHEMA_UI = ui_value("schema", default={})
+PLATFORM_SLM = resolve_platform_slm_runtime()
 
 PROVIDER_DEFAULTS = {
     "Configured AI provider": {
-        "provider": os.getenv("SP_NEMO_DATA_DESIGNER_PROVIDER", "internal"),
-        "endpoint": os.getenv("SP_NEMO_DATA_DESIGNER_ENDPOINT", "http://localhost:8000/v1"),
-        "model": os.getenv("SP_NEMO_DATA_DESIGNER_MODEL", "local/slm"),
-        "api_key_env": "SP_NEMO_DATA_DESIGNER_API_KEY",
-        "temperature": 0.35,
-        "top_p": 0.9,
-        "max_tokens": 4096,
+        "provider": PLATFORM_SLM.provider,
+        "endpoint": PLATFORM_SLM.endpoint,
+        "model": PLATFORM_SLM.model_id,
+        "api_key_env": PLATFORM_SLM.api_key_env,
+        "temperature": 0.1,
+        "top_p": 0.8,
+        "max_tokens": 768,
         "extra_body": None,
-    },
-    "OpenAI": {
-        "provider": "openai",
-        "endpoint": "https://api.openai.com/v1",
-        "model": "gpt-4o-mini",
-        "api_key_env": "OPENAI_API_KEY",
-        "temperature": 0.35,
-        "top_p": 0.9,
-        "max_tokens": 2048,
-        "extra_body": None,
-    },
-    "OpenRouter": {
-        "provider": "openrouter",
-        "endpoint": "https://openrouter.ai/api/v1",
-        "model": "openai/gpt-4o-mini",
-        "api_key_env": "OPENROUTER_API_KEY",
-        "temperature": 0.35,
-        "top_p": 0.9,
-        "max_tokens": 2048,
-        "extra_body": None,
-    },
+    }
 }
 
 
@@ -76,6 +76,8 @@ def _init_state() -> None:
         "schema_file_id": None,
         "schema_ai_prompt": "",
         "schema_ai_ddl": "",
+        "schema_ai_draft_cache_hit": False,
+        "schema_ai_draft_repairs": [],
         "schema_rules": "",
         "schema_rule_rows": [],
         "schema_seed_df": None,
@@ -123,9 +125,7 @@ def _import_data_designer():
 
 
 def _is_local_endpoint(endpoint: str) -> bool:
-    parsed = urlparse(endpoint)
-    host = (parsed.hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1"}
+    return is_local_endpoint(endpoint)
 
 
 def _api_key(provider_label: str, api_key_env: str, api_key_value: str | None = None) -> str | None:
@@ -143,31 +143,45 @@ def _api_key(provider_label: str, api_key_env: str, api_key_value: str | None = 
 
 
 def _requires_api_key(endpoint: str) -> bool:
-    return not _is_local_endpoint(endpoint)
+    return not is_local_endpoint(endpoint)
 
 
-def _model_provider_api_key(endpoint: str, api_key_env: str) -> str | None:
-    return None if _is_local_endpoint(endpoint) else api_key_env
+def _preflight_schema_slm(provider: str, endpoint: str, model: str, api_key_env: str) -> None:
+    runtime = PlatformSLMRuntime(
+        model_id=model,
+        provider=provider,
+        endpoint=normalize_model_endpoint(endpoint),
+        api_key_env=api_key_env,
+        model_family=PLATFORM_SLM.model_family,
+    )
+    preflight_slm_endpoint(runtime)
 
 
 def _provider_extra_body(provider_label: str, endpoint: str) -> Mapping[str, Any] | None:
-    if _is_local_endpoint(endpoint):
+    if is_local_endpoint(endpoint):
         return None
     return PROVIDER_DEFAULTS[provider_label].get("extra_body")
 
 
 def _apply_health_check_policy(skip_health_check: bool) -> None:
-    if skip_health_check:
+    if skip_health_check or data_designer_skip_health_check():
         os.environ["DATA_DESIGNER_SKIP_MODEL_HEALTH_CHECKS"] = "1"
 
 
+def _env_skip_health_check() -> bool:
+    return data_designer_skip_health_check()
+
+
 def _model_provider(dd: Any, provider: str, endpoint: str, api_key_env: str) -> Any:
-    return dd.ModelProvider(
-        name=provider,
-        endpoint=endpoint,
-        provider_type="openai",
-        api_key=_model_provider_api_key(endpoint, api_key_env),
+    apply_local_endpoint_network_policy(endpoint)
+    runtime = PlatformSLMRuntime(
+        model_id=PLATFORM_SLM.model_id,
+        provider=provider,
+        endpoint=normalize_model_endpoint(endpoint),
+        api_key_env=api_key_env,
+        model_family=PLATFORM_SLM.model_family,
     )
+    return build_data_designer_provider(dd, runtime)
 
 
 def _model_config(
@@ -181,20 +195,25 @@ def _model_config(
     max_tokens: int,
     extra_body: Mapping[str, Any] | None,
     skip_health_check: bool,
+    workflow: str,
 ) -> Any:
-    params = {
-        "temperature": float(temperature),
-        "top_p": float(top_p),
-        "max_tokens": int(max_tokens),
-    }
-    if extra_body:
-        params["extra_body"] = dict(extra_body)
-    return dd.ModelConfig(
-        alias=alias,
-        model=model,
+    runtime = PlatformSLMRuntime(
+        model_id=model,
         provider=provider,
-        skip_health_check=bool(skip_health_check),
-        inference_parameters=dd.ChatCompletionInferenceParams(**params),
+        endpoint=PLATFORM_SLM.endpoint,
+        api_key_env=PLATFORM_SLM.api_key_env,
+        model_family=PLATFORM_SLM.model_family,
+    )
+    return build_data_designer_model_config(
+        dd,
+        alias=alias,
+        workflow=workflow,
+        runtime=runtime,
+        temperature=float(temperature),
+        top_p=float(top_p),
+        max_tokens=int(max_tokens),
+        extra_body=dict(extra_body) if extra_body else None,
+        skip_health_check=bool(skip_health_check or data_designer_skip_health_check()),
     )
 
 
@@ -207,14 +226,14 @@ def _hidden_provider_config(prefix: str, *, fallback_prefix: str | None = None) 
     return (
         provider_label,
         str(st.session_state.get(f"{source}_provider", defaults["provider"])),
-        str(st.session_state.get(f"{source}_endpoint", defaults["endpoint"])),
+        normalize_model_endpoint(str(st.session_state.get(f"{source}_endpoint", defaults["endpoint"]))),
         str(st.session_state.get(f"{source}_model", defaults["model"])),
         str(st.session_state.get(f"{source}_api_key_env", defaults["api_key_env"])),
         str(st.session_state.get(f"{source}_api_key_value", "")),
         float(st.session_state.get(f"{source}_temperature", defaults["temperature"])),
         float(st.session_state.get(f"{source}_top_p", defaults["top_p"])),
         int(st.session_state.get(f"{source}_max_tokens", defaults["max_tokens"])),
-        bool(st.session_state.get(f"{source}_skip_health_check", False)),
+        bool(st.session_state.get(f"{source}_skip_health_check", _env_skip_health_check())),
     )
 
 
@@ -357,60 +376,36 @@ def _draft_schema_json(
 ) -> str:
     if _requires_api_key(endpoint) and not _api_key(provider_label, api_key_env, api_key_value):
         raise RuntimeError(f"Set `{api_key_env}` before asking AI to draft a schema.")
-    dd, data_designer_cls = _import_data_designer()
-    _apply_health_check_policy(skip_health_check)
-    model_alias = "schema-draft-generator"
-    builder = dd.DataDesignerConfigBuilder(
-        model_configs=[
-            _model_config(
-                dd,
-                alias=model_alias,
-                provider=provider,
-                model=model,
-                temperature=min(float(temperature), 0.2),
-                top_p=float(top_p),
-                max_tokens=min(int(max_tokens), 4096),
-                extra_body=_provider_extra_body(provider_label, endpoint),
-                skip_health_check=skip_health_check,
-            )
-        ]
-    )
-    builder.add_column(
-        dd.SamplerColumnConfig(
-            name="request_id",
-            sampler_type=dd.SamplerType.UUID,
-            params=dd.UUIDSamplerParams(short_form=True),
-            convert_to="str",
-            drop=True,
-        )
-    )
-    builder.add_column(
-        dd.LLMStructuredColumnConfig(
-            name="schema_json",
-            model_alias=model_alias,
-            system_prompt="Create structured schema JSON that conforms to the provided output schema.",
-            prompt=(
-                "For request {{ request_id }}, draft a relational synthetic-data schema for this request:\n"
-                f"{prompt}"
-            ),
-            output_format=_schema_draft_output_format(),
-        )
-    )
+    previous_env = {
+        "SP_PLATFORM_SLM_PROVIDER": os.environ.get("SP_PLATFORM_SLM_PROVIDER"),
+        "SP_PLATFORM_SLM_ENDPOINT": os.environ.get("SP_PLATFORM_SLM_ENDPOINT"),
+        "SP_PLATFORM_SLM_MODEL": os.environ.get("SP_PLATFORM_SLM_MODEL"),
+        "SP_PLATFORM_SLM_API_KEY_ENV": os.environ.get("SP_PLATFORM_SLM_API_KEY_ENV"),
+        "SP_SCHEMA_DRAFT_MAX_TOKENS": os.environ.get("SP_SCHEMA_DRAFT_MAX_TOKENS"),
+        "DATA_DESIGNER_SKIP_MODEL_HEALTH_CHECKS": os.environ.get("DATA_DESIGNER_SKIP_MODEL_HEALTH_CHECKS"),
+        api_key_env: os.environ.get(api_key_env),
+    }
     try:
-        frame = _preview_to_frame(
-            data_designer_cls(model_providers=[_model_provider(dd, provider, endpoint, api_key_env)]).preview(
-                builder,
-                num_records=1,
-            )
-        )
-    except Exception as exc:
-        raise _explain_empty_dataset_failure(exc, provider=provider, model=model) from exc
-    if frame.empty or "schema_json" not in frame:
-        raise RuntimeError(f"Schema draft did not return a `schema_json` column. Raw frame: {frame}")
-    schema_payload = _coerce_structured_schema_value(frame.loc[0, "schema_json"])
-    schema_json = json.dumps(schema_payload, indent=2)
-    load_schema_bytes(schema_json.encode("utf-8"), "ai_schema.json")
-    return schema_json
+        os.environ["SP_PLATFORM_SLM_PROVIDER"] = provider
+        os.environ["SP_PLATFORM_SLM_ENDPOINT"] = normalize_model_endpoint(endpoint)
+        os.environ["SP_PLATFORM_SLM_MODEL"] = model
+        os.environ["SP_PLATFORM_SLM_API_KEY_ENV"] = api_key_env
+        os.environ["SP_SCHEMA_DRAFT_MAX_TOKENS"] = str(min(int(max_tokens), 768))
+        if api_key_value:
+            os.environ[api_key_env] = api_key_value
+        if skip_health_check:
+            os.environ["DATA_DESIGNER_SKIP_MODEL_HEALTH_CHECKS"] = "1"
+
+        draft = draft_schema_from_prompt_workflow(prompt)
+        st.session_state.schema_ai_draft_cache_hit = draft.cache_hit
+        st.session_state.schema_ai_draft_repairs = draft.repairs
+        return draft.schema_json
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _column_prompt(*, table_name: str, column: Any, rules: list[str]) -> str:
@@ -437,6 +432,18 @@ def _category_values(column: Any) -> list[str]:
     if "type" in name:
         return ["standard", "premium", "enterprise"]
     return ["alpha", "beta", "gamma"]
+
+
+def _category_weights(column: Any) -> list[float] | None:
+    params = dict(getattr(column, "distribution_params", {}) or {})
+    values = _category_values(column)
+    weights = params.get("weights") or params.get("probabilities")
+    if not isinstance(weights, list) or len(weights) != len(values):
+        return None
+    total = sum(float(weight) for weight in weights)
+    if total <= 0:
+        return None
+    return [float(weight) / total for weight in weights]
 
 
 def _datetime_convert_format(column_name: str, column_type: str) -> str:
@@ -528,7 +535,7 @@ def _add_column_from_schema(dd: Any, builder: Any, *, table_name: str, column: A
             dd.SamplerColumnConfig(
                 name=name,
                 sampler_type=dd.SamplerType.CATEGORY,
-                params=dd.CategorySamplerParams(values=_category_values(column)),
+                params=dd.CategorySamplerParams(values=_category_values(column), weights=_category_weights(column)),
                 convert_to="str",
             )
         )
@@ -573,6 +580,7 @@ def _build_table_recipe(
     if _requires_api_key(endpoint) and not _api_key(provider_label, api_key_env, api_key_value):
         raise RuntimeError(f"Set `{api_key_env}` before running preview.")
     _apply_health_check_policy(skip_health_check)
+    _preflight_schema_slm(provider, endpoint, model, api_key_env)
 
     model_alias = "schema-text-generator"
     builder = dd.DataDesignerConfigBuilder(
@@ -587,6 +595,7 @@ def _build_table_recipe(
                 max_tokens=max_tokens,
                 extra_body=_provider_extra_body(provider_label, endpoint),
                 skip_health_check=skip_health_check,
+                workflow="schema-row-generation",
             )
         ]
     )
@@ -714,6 +723,10 @@ with st.container(border=True):
                     st.code(str(exc))
 
     if st.session_state.schema_ai_ddl:
+        if st.session_state.schema_ai_draft_cache_hit:
+            st.caption("Loaded from local schema draft cache.")
+        elif st.session_state.schema_ai_draft_repairs:
+            st.caption(f"Schema draft normalized with {len(st.session_state.schema_ai_draft_repairs)} repair action(s).")
         edited_ddl = st.text_area(
             "Review or edit AI-generated JSON schema",
             value=st.session_state.schema_ai_ddl,
@@ -858,50 +871,36 @@ with st.container(border=True):
     if st.button("Preview records", type="primary", width="stretch", disabled=not rules):
         with st.status("Generating preview...", expanded=True) as status:
             try:
-                preview_tables = {}
-                configs = {}
+                status.write("Preparing schema contract...")
                 with measure_generation() as run_stats:
-                    for table in schema.tables:
-                        status.write(f"Preparing `{table.name}`...")
-                        builder = _build_table_recipe(
-                            schema=schema,
-                            table_name=table.name,
-                            rules=rules,
-                            provider_label=provider_label,
-                            provider=provider,
-                            endpoint=endpoint,
-                            model=model,
-                            api_key_env=api_key_env,
-                            api_key_value=api_key_value,
-                            temperature=float(temperature),
-                            top_p=float(top_p),
-                            max_tokens=int(max_tokens),
-                            skip_health_check=skip_health_check,
-                            seed_df=st.session_state.schema_seed_df,
-                        )
-                        configs[table.name] = _config_to_dict(builder)
-                        status.write(f"Previewing `{table.name}`...")
-                        preview_tables[table.name] = _preview_table(
-                            builder,
-                            rows=row_counts[table.name],
-                            provider=provider,
-                            endpoint=endpoint,
-                            model=model,
-                            api_key_env=api_key_env,
-                        )
+                    mode_result = generate_from_schema(
+                        schema,
+                        row_count=max(row_counts.values()),
+                        table_row_counts=row_counts,
+                        seed=int(os.getenv("SP_SCHEMA_SEED", "7")),
+                        output_dir=Path(st.session_state.schema_workdir) / "exports",
+                        export_format="csv",
+                        preview_rows=max(row_counts.values()),
+                    )
                 result = {
-                    "preview_tables": preview_tables,
-                    "data_designer_configs": configs,
+                    "preview_tables": mode_result.preview_tables,
+                    "data_designer_configs": {
+                        "schema_contract": {
+                            "generation": "schema_pipeline",
+                            "validation": validation_highlights(mode_result),
+                            "rules": rules,
+                        }
+                    },
                     "rules": rules,
                     "summary": {
                         "provider": provider,
                         "model": model,
-                        "tables": {name: len(frame) for name, frame in preview_tables.items()},
+                        "tables": dict(mode_result.row_counts),
                     },
                 }
                 st.session_state.schema_result = result
                 st.session_state.schema_run_metrics = dict(run_stats)
-                st.session_state.schema_zip_bytes = _package_result(result)
+                st.session_state.schema_zip_bytes = package_download(mode_result)
                 status.update(label="Preview complete", state="complete", expanded=False)
                 st.rerun()
             except Exception as exc:
@@ -928,7 +927,7 @@ with st.container(border=True):
     table_name = st.selectbox("Preview table", list(result["preview_tables"]))
     st.dataframe(result["preview_tables"][table_name], width="stretch", hide_index=True)
     with st.expander("Generation config", expanded=False):
-        st.json(result["data_designer_configs"][table_name])
+        st.json(result["data_designer_configs"].get(table_name) or result["data_designer_configs"].get("schema_contract", {}))
 
 with st.container(border=True):
     step_header(7, "Download", st.session_state.schema_zip_bytes is not None)

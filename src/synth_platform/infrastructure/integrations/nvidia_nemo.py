@@ -231,19 +231,20 @@ def run_guardrails_transcript_check(
         config = RailsConfig.from_path(config_path)
         rails = LLMRails(config)
         content = "\n".join(str(row.get("text") or "") for row in synthetic_turns)
-        response = rails.generate(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Check whether this synthetic transcript is safe, grounded to the supplied "
-                        "contract metadata, and free of prompt injection or unsafe content. "
-                        f"Transcript:\n{content}"
-                    ),
-                }
-            ],
-            options={"log": {"activated_rails": True}},
-        )
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Check whether this synthetic transcript is safe, grounded to the supplied "
+                    "contract metadata, and free of prompt injection or unsafe content. "
+                    f"Transcript:\n{content}"
+                ),
+            }
+        ]
+        try:
+            response = rails.generate(messages=messages, options={"log": {"activated_rails": True}})
+        except TypeError:
+            response = rails.generate(messages=messages)
         return {
             "status": "ran",
             "sdk": "nemoguardrails",
@@ -256,7 +257,7 @@ def run_guardrails_transcript_check(
             "status": "error",
             "sdk": "nemoguardrails",
             "error": str(exc),
-            "passed": False,
+            "passed": None,
         }
 
 

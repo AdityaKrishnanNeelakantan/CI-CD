@@ -69,19 +69,40 @@ generation features, install the optional extras supported by your Python
 version.
 
 SDK-backed generation is configured through an OpenAI-compatible model provider
-endpoint. In customer environments this should point to an internally hosted
-NIM/LLM service such as NIM, vLLM, TGI, OpenRouter-compatible gateway,
-Together-compatible gateway, or another OpenAI-compatible endpoint:
+endpoint. One shared SLM runtime is used by Schema Mode, PDF Twin, and Customer
+Interactions Twin. Local development defaults to the Ollama-compatible
+`synth-platform-slm` alias. In customer environments this should point to an
+internally hosted NIM, vLLM, TGI, or OpenAI-compatible gateway:
 
 ```bash
-export SP_NEMO_DATA_DESIGNER_ENDPOINT="http://internal-llm.example.com/v1"
-export SP_NEMO_DATA_DESIGNER_PROVIDER="internal"
-export SP_NEMO_DATA_DESIGNER_MODEL="customer/slm"
+export SP_PLATFORM_SLM_ENDPOINT="http://internal-llm.example.com/v1"
+export SP_PLATFORM_SLM_PROVIDER="internal"
+export SP_PLATFORM_SLM_MODEL="synth-platform-slm"
 ```
 
-No generation key is required for local endpoints such as
-`http://localhost:8000/v1`. If an internal gateway requires authentication, set
-`SP_NEMO_DATA_DESIGNER_API_KEY` in the runtime environment.
+For local Ollama development, use `http://localhost:11434/v1` and set
+`SP_NEMO_DATA_DESIGNER_API_KEY=ollama`. If an internal gateway requires
+authentication, set `SP_PLATFORM_SLM_API_KEY_ENV` to the environment-variable
+name holding the key.
+The older `SP_NEMO_DATA_DESIGNER_*` names are still accepted as compatibility
+fallbacks.
+
+For Customer Interactions/Transcript Twin on a local SLM, keep each SDK request
+small and let Data Designer process one turn per seed row:
+
+```bash
+export SP_TRANSCRIPT_DATA_DESIGNER_MAX_TOKENS="96"
+export SP_TRANSCRIPT_DATA_DESIGNER_TIMEOUT="180"
+export SP_TRANSCRIPT_DATA_DESIGNER_MAX_PARALLEL_REQUESTS="4"
+```
+
+To inspect raw OpenAI-compatible payloads from Data Designer, run the local
+logging proxy and point the endpoint at the proxy:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\openai_compatible_proxy.py --target http://127.0.0.1:11434 --port 18000
+$env:SP_NEMO_DATA_DESIGNER_ENDPOINT="http://127.0.0.1:18000/v1"
+```
 
 Schema upload in the Streamlit UI is qualified for SQL DDL `.sql` files with
 `CREATE TABLE` statements, fields, keys, defaults, constraints, and explicit

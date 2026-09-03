@@ -26,6 +26,7 @@ SEMANTIC_PATTERNS: List[Tuple[str, str, Dict[str, Any]]] = [
     (r"^name$|^full_?name$|^user_?name$|^customer_?name$|^display_?name$", "text", {"text_type": "name"}),
     (r"^first_?name$", "text", {"text_type": "first_name"}),
     (r"^last_?name$|^surname$|^family_?name$", "text", {"text_type": "last_name"}),
+    (r"^manager_?name$|^owner_?name$|^contact_?name$", "text", {"text_type": "name"}),
 
     # Phone patterns
     (r"^phone$|^phone_?number$|^mobile$|^cell$|^telephone$", "text", {"text_type": "phone"}),
@@ -43,6 +44,7 @@ SEMANTIC_PATTERNS: List[Tuple[str, str, Dict[str, Any]]] = [
     # Company / merchant
     (r"^company$|^company_?name$|^organization$|^org_?name$|^employer$", "text", {"text_type": "company"}),
     (r"^merchant$|^merchant_?name$", "text", {"text_type": "company"}),
+    (r"^branch_?name$|^store_?name$|^office_?name$|^location_?name$", "text", {"text_type": "company"}),
 
     # URL patterns
     (r"^url$|^website$|^web_?url$|^link$|^profile_?url$", "text", {"text_type": "url"}),
@@ -66,7 +68,8 @@ SEMANTIC_PATTERNS: List[Tuple[str, str, Dict[str, Any]]] = [
     ),
 
     # Price/Money patterns (must be positive)
-    (r"^price$|^cost$|^amount$|^fee$|^total$|^subtotal$|^tax$|^balance$|^principal$", "float", {"distribution": "uniform", "min": 0, "max": 1000, "decimals": 2}),
+    (r"^interest_?rate$|^apr$|^apy$", "float", {"distribution": "uniform", "min": 1.0, "max": 24.99, "decimals": 2}),
+    (r"^price$|^cost$|^amount$|_amount$|^fee$|_fee$|^total$|_total$|^subtotal$|^tax$|^balance$|_balance$|^principal$|_usd$", "float", {"distribution": "uniform", "min": 0, "max": 1000, "decimals": 2}),
     (r"^mrr$|^arr$|^revenue$|^income$|^salary$|^wage$", "float", {"distribution": "uniform", "min": 0, "max": 100000, "decimals": 2}),
 
     # Age patterns
@@ -297,7 +300,7 @@ class SemanticInference:
             # Case 2: Numeric column that could be negative but shouldn't be
             if column.type in ["int", "float"]:
                 lowered = column.name.lower()
-                if any(token in lowered for token in ("price", "age", "score", "amount", "balance")):
+                if any(token in lowered for token in ("price", "age", "score", "amount", "balance", "rate", "apr", "apy")):
                     if "min" not in column.distribution_params:
                         should_fix = True
 

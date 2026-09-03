@@ -1,7 +1,7 @@
 param(
-    [string]$Endpoint = "http://localhost:8000/v1",
+    [string]$Endpoint = "http://localhost:11434/v1",
     [string]$Provider = "internal",
-    [string[]]$Models = @("local/slm"),
+    [string[]]$Models = @("synth-platform-slm"),
     [int]$TimeoutSeconds = 60
 )
 
@@ -67,9 +67,9 @@ function Test-DataDesigner {
     param([string]$Model)
 
     $env:DATA_DESIGNER_SKIP_MODEL_HEALTH_CHECKS = "1"
-    $env:SP_NEMO_DATA_DESIGNER_ENDPOINT = $Endpoint
-    $env:SP_NEMO_DATA_DESIGNER_PROVIDER = $Provider
-    $env:SP_NEMO_DATA_DESIGNER_MODEL = $Model
+    $env:SP_PLATFORM_SLM_ENDPOINT = $Endpoint
+    $env:SP_PLATFORM_SLM_PROVIDER = $Provider
+    $env:SP_PLATFORM_SLM_MODEL = $Model
     $output = & .\.venv\Scripts\python.exe scripts\check_nvidia_data_designer.py 2>&1
     $ok = $LASTEXITCODE -eq 0
     [pscustomobject]@{

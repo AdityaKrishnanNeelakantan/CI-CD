@@ -17,6 +17,7 @@ SAMPLE_SCHEMA = Path("tests/fixtures/schema/schema_twin_minimal.sql")
 
 
 def _install_fake_data_designer(monkeypatch, responses: list[str], calls: list[dict]) -> None:
+    monkeypatch.setenv("SP_PLATFORM_SLM_PREFLIGHT", "0")
     original_find_spec = importlib.util.find_spec
 
     class FakeConfig:
@@ -31,6 +32,10 @@ def _install_fake_data_designer(monkeypatch, responses: list[str], calls: list[d
 
         def add_column(self, config):
             self.columns.append(config)
+
+        def with_seed_dataset(self, seed_source):
+            self.seed_source = seed_source
+            return self
 
         def build(self):
             return {
@@ -66,6 +71,7 @@ def _install_fake_data_designer(monkeypatch, responses: list[str], calls: list[d
 
     fake_dd = types.SimpleNamespace(
         DataDesignerConfigBuilder=FakeBuilder,
+        DataFrameSeedSource=FakeConfig,
         ModelConfig=FakeConfig,
         ChatCompletionInferenceParams=FakeConfig,
         ModelProvider=FakeConfig,
@@ -126,7 +132,7 @@ def test_schema_twin_collects_schema_rules_and_generation_config(monkeypatch):
     assert any(b.label == "Ask AI to draft schema" for b in at.button)
 
     rule_area = next(area for area in at.text_area if area.label == "Global generation rules")
-    rule_area.set_value("Use realistic customer names and paid/pending/cancelled order status values.").run()
+    at = rule_area.set_value("Use realistic customer names and paid/pending/cancelled order status values.").run()
     assert not at.exception, [str(e) for e in at.exception]
 
     assert at.session_state["schema_rules"]
@@ -138,18 +144,16 @@ def test_schema_twin_collects_schema_rules_and_generation_config(monkeypatch):
     assert any(b.label == "Preview records" for b in at.button)
 
     preview_button = next(button for button in at.button if button.label == "Preview records")
-    preview_button.click().run()
+    at = preview_button.click().run()
     assert not at.exception, [str(e) for e in at.exception]
 
-    preview_calls = [call for call in calls if call.get("num_records") and call.get("columns")]
-    created_at_columns = [
-        column for call in preview_calls for column in call["columns"] if getattr(column, "name", None) == "created_at"
-    ]
-    assert created_at_columns
-    assert all(column.convert_to == "%Y-%m-%dT%H:%M:%S" for column in created_at_columns)
+    result = at.session_state["schema_result"]
+    assert result["preview_tables"]["users"].shape[0] > 0
+    assert result["preview_tables"]["orders"].shape[0] > 0
+    assert result["data_designer_configs"]["schema_contract"]["validation"]["hard_checks_passed"] is True
 
 
-def test_schema_twin_ai_draft_uses_data_designer_structured_column(monkeypatch):
+def test_schema_twin_ai_draft_uses_generic_prompt_workflow(monkeypatch):
     calls = []
     responses = [
         """
@@ -185,15 +189,24 @@ def test_schema_twin_ai_draft_uses_data_designer_structured_column(monkeypatch):
 
     _install_fake_data_designer(monkeypatch, responses, calls)
     monkeypatch.delenv("SP_NEMO_DATA_DESIGNER_API_KEY", raising=False)
+    monkeypatch.setenv("SP_SCHEMA_DRAFT_CACHE", "0")
 
     at = AppTest.from_file(APP_PATH, default_timeout=120)
     at.run()
     assert not at.exception, [str(e) for e in at.exception]
 
-    draft_button = next(button for button in at.button if button.label == "Ask AI to draft schema")
-    draft_button.click().run()
+    prompt = next(area for area in at.text_area if area.label == "Describe the dataset you need")
+    at = prompt.set_value(
+        "Create an ecommerce schema with users and orders. Include user to order relationships."
+    ).run()
     assert not at.exception, [str(e) for e in at.exception]
 
+    draft_button = next(button for button in at.button if button.label == "Ask AI to draft schema")
+    assert not draft_button.disabled
+    at = draft_button.click().run()
+    assert not at.exception, [str(e) for e in at.exception]
+
+    assert calls
     assert '"name": "tiny_ecommerce"' in at.session_state["schema_ai_ddl"]
     assert '"users"' in at.session_state["schema_ai_ddl"]
     assert '"orders"' in at.session_state["schema_ai_ddl"]
@@ -201,6 +214,6 @@ def test_schema_twin_ai_draft_uses_data_designer_structured_column(monkeypatch):
     assert len(preview_calls) == 1
     assert preview_calls[0]["model_alias"] == "schema-draft-generator"
     assert preview_calls[0]["provider"] == "internal"
-    assert preview_calls[0]["model"] == "local/slm"
-    assert preview_calls[0]["output_format"]["required"] == ["name", "tables"]
-    assert "draft a relational synthetic-data schema" in preview_calls[0]["prompt"]
+    assert preview_calls[0]["model"] == "synth-platform-slm"
+    assert preview_calls[0]["output_format"] is None
+    assert "Required table names inferred from the user request" in preview_calls[0]["prompt"]

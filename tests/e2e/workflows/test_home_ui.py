@@ -10,7 +10,7 @@ pytestmark = pytest.mark.e2e
 APP_PATH = "src/synth_platform/interfaces/streamlit/pages/home.py"
 
 
-def test_home_page_lists_all_workflows_and_shared_controls():
+def test_home_page_lists_all_workflows():
     at = AppTest.from_file(APP_PATH, default_timeout=60)
     at.run()
 
@@ -20,4 +20,4 @@ def test_home_page_lists_all_workflows_and_shared_controls():
     assert "Database Twin" in body
     assert "PDF Twin" in body
     assert "Customer Interactions Twin" in body
-    assert "Shared platform controls" in body
+    assert "Shared platform controls" not in body

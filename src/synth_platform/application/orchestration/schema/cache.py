@@ -50,13 +50,10 @@ class SourceProfileCache:
     """Disk cache for serialized source profiles keyed by fingerprint."""
 
     def __init__(self, root: Optional[Union[str, Path]] = None) -> None:
+        configured = os.environ.get("SP_SOURCE_PROFILE_CACHE_DIR")
         cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-        self.root = Path(root or cache_home / "synth-platform" / "source_profiles")
-        try:
-            self.root.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            self.root = Path(tempfile.gettempdir()) / "synth-platform" / "source_profiles"
-            self.root.mkdir(parents=True, exist_ok=True)
+        preferred = Path(root or configured or cache_home / "synth-platform" / "source_profiles")
+        self.root = self._writable_root(preferred)
 
     def _path(self, key: str) -> Path:
         return self.root / f"{key}.json"
@@ -69,5 +66,28 @@ class SourceProfileCache:
 
     def put(self, key: str, profile_dict: Dict[str, Any]) -> Path:
         path = self._path(key)
-        path.write_text(json.dumps(profile_dict, indent=2), encoding="utf-8")
+        payload = json.dumps(profile_dict, indent=2)
+        try:
+            path.write_text(payload, encoding="utf-8")
+        except OSError:
+            self.root = self._writable_root(self._fallback_root())
+            path = self._path(key)
+            path.write_text(payload, encoding="utf-8")
         return path
+
+    @staticmethod
+    def _fallback_root() -> Path:
+        return Path(tempfile.gettempdir()) / "synth-platform" / "source_profiles"
+
+    @classmethod
+    def _writable_root(cls, root: Path) -> Path:
+        for candidate in (root, cls._fallback_root(), Path.cwd() / "build" / "source_profiles"):
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                probe = candidate / ".write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                return candidate
+            except OSError:
+                continue
+        raise PermissionError(f"No writable source profile cache directory found for {root}")

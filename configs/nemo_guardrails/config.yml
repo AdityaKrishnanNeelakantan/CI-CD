@@ -1,7 +1,7 @@
 models:
   - type: main
     engine: openai
-    model: local/slm
+    model: synth-platform-slm
 
 rails:
   input:

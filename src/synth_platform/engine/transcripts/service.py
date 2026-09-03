@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import random
 import re
@@ -19,10 +20,7 @@ from synth_platform.domain.contracts.models import (
     SourceDescriptor,
 )
 from synth_platform.domain.ssot.preview import SSOTPreview, SSOTPreviewItem
-from synth_platform.infrastructure.integrations.nvidia_nemo import (
-    run_curator_pii_redaction,
-    run_guardrails_transcript_check,
-)
+from synth_platform.engine.transcripts.ssot_designer import build_transcript_ssot_with_data_designer
 
 
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
@@ -95,10 +93,53 @@ _STOPWORDS = {
     "from", "have", "into", "like", "more", "must", "that", "the", "their",
     "them", "then", "there", "these", "this", "through", "using", "what",
     "when", "where", "which", "with", "without", "would", "your", "you", "are",
-    "account", "address", "birth", "card", "cell", "date", "dob", "email",
-    "active", "alright", "hello", "identifier", "name", "number", "phone",
-    "policy", "system", "ssn", "yes",
+    "address", "birth", "cell", "date", "dob", "email",
+    "active", "actually", "alright", "bear", "but", "bye", "calling", "can",
+    "cause", "come", "correct", "day", "exactly", "external", "fine", "for",
+    "give", "go", "going", "good", "got", "great", "guess", "hello", "help",
+    "her", "hers", "here", "him", "his", "hold", "huh", "internal", "just",
+    "know", "let", "look", "looking", "matter", "maybe", "mean", "moment",
+    "morning", "need", "needs", "not", "okay", "out", "please", "problem",
+    "provide", "pull", "really", "request", "right", "said", "say", "second",
+    "see", "she", "sure", "take", "thank", "thanks", "they", "thing",
+    "things", "today", "try", "trying", "used", "was", "welcome", "well",
+    "yeah", "yes", "yep",
+    "identifier", "name", "number", "phone", "system", "ssn",
 }
+
+
+def _run_curator_pii_redaction(
+    text: str,
+    *,
+    enabled: bool,
+    base_url: str = "",
+    api_key: str | None = None,
+    model: str = "meta/llama-3.1-70b-instruct",
+    language: str = "en",
+) -> dict[str, Any]:
+    nemo = importlib.import_module("synth_platform.infrastructure.integrations.nvidia_nemo")
+    return nemo.run_curator_pii_redaction(
+        text,
+        enabled=enabled,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        language=language,
+    )
+
+
+def _run_guardrails_transcript_check(
+    synthetic_turns: list[dict[str, Any]],
+    *,
+    enabled: bool,
+    config_path: str = "",
+) -> dict[str, Any]:
+    nemo = importlib.import_module("synth_platform.infrastructure.integrations.nvidia_nemo")
+    return nemo.run_guardrails_transcript_check(
+        synthetic_turns,
+        enabled=enabled,
+        config_path=config_path,
+    )
 
 
 @dataclass(frozen=True)
@@ -461,7 +502,7 @@ def sanitize_transcript_turns(
     locale_context = locale_context or _locale_context_from_text(" ".join(turn.text for turn in turns))
     for turn in turns:
         speaker_key = turn.speaker.strip() or "speaker_unknown"
-        speaker_map.setdefault(speaker_key, f"speaker_{len(speaker_map) + 1}")
+        speaker_map.setdefault(speaker_key, _safe_speaker_label(speaker_key, len(speaker_map) + 1))
         text = _redact_text(turn.text, locale_context=locale_context)
         sanitized.append(
             TranscriptTurn(
@@ -474,6 +515,22 @@ def sanitize_transcript_turns(
     return sanitized
 
 
+def _safe_speaker_label(value: str, index: int) -> str:
+    cleaned = re.sub(r"\s+", " ", value.strip(" '\"\t,"))
+    lower = cleaned.lower()
+    if lower in {"internal", "agent_internal", "support_internal", "representative", "rep"}:
+        return "Agent"
+    if lower in {"external", "caller_external", "customer_external"}:
+        return "Customer"
+    if lower in {"agent", "customer", "caller", "user", "client", "member", "patient", "supervisor", "specialist"}:
+        return cleaned[:1].upper() + cleaned[1:]
+    if re.fullmatch(r"person\s+\d{1,3}", lower):
+        return "Person " + re.search(r"\d{1,3}", lower).group(0)
+    if re.fullmatch(r"speaker[_ -]?\d{1,3}", lower):
+        return f"speaker_{index}"
+    return f"speaker_{index}"
+
+
 def _top_terms(
     turns: list[TranscriptTurn],
     *,
@@ -482,6 +539,23 @@ def _top_terms(
 ) -> list[str]:
     privacy_terms = privacy_terms or set()
     counts: dict[str, int] = {}
+    priority_terms = [
+        "charge",
+        "charged",
+        "payment",
+        "refund",
+        "card",
+        "order",
+        "login",
+        "password",
+        "disabled",
+        "account",
+        "claim",
+        "activate",
+        "activation",
+        "benefit",
+        "plan",
+    ]
     for turn in turns:
         for word in _WORD.findall(turn.text.lower()):
             word = word.strip("-")
@@ -494,10 +568,9 @@ def _top_terms(
             ):
                 continue
             counts[word] = counts.get(word, 0) + 1
-    return [
-        word
-        for word, _count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
-    ]
+    ordered = [term for term in priority_terms if counts.get(term)]
+    ordered.extend(word for word, _count in sorted(counts.items(), key=lambda item: (-item[1], item[0])) if word not in ordered)
+    return ordered[:limit]
 
 
 def _hash_text(value: str) -> str:
@@ -626,9 +699,9 @@ def build_transcript_contract(
     nvidia_options: dict[str, Any] | None = None,
 ) -> CanonicalContract:
     nvidia_options = nvidia_options or {}
-    curator_result = run_curator_pii_redaction(
+    curator_result = _run_curator_pii_redaction(
         text,
-        enabled=bool(nvidia_options.get("enabled", False)),
+        enabled=bool(nvidia_options.get("curator_enabled", nvidia_options.get("enabled", False))),
         base_url=str(nvidia_options.get("curator_base_url") or ""),
         api_key=str(nvidia_options.get("curator_api_key") or "") or None,
         model=str(nvidia_options.get("curator_model") or "meta/llama-3.1-70b-instruct"),
@@ -646,6 +719,18 @@ def build_transcript_contract(
         privacy_terms=locale_context.replacement_terms or set(),
     )
     synthetic_context = _synthetic_context_from_turns(sanitized_turns, topic_terms=top_terms)
+    synthetic_context["source_locale"] = locale_context.locale
+    synthetic_context["target_locale"] = str(nvidia_options.get("target_locale") or "").strip() or locale_context.locale
+    synthetic_context["target_persona"] = str(nvidia_options.get("target_persona") or "").strip() or "privacy-safe support participant"
+    build_structured_ssot = bool(nvidia_options.get("build_structured_ssot", nvidia_options.get("enabled", False)))
+    if build_structured_ssot:
+        structured_ssot = build_transcript_ssot_with_data_designer(
+            sanitized_turns,
+            source_name=source_name,
+            enabled=bool(nvidia_options.get("enabled", False)),
+        )
+    else:
+        structured_ssot = {"status": "pending", "reason": "deferred_until_generation"}
     provenance = CanonicalProvenance(
         produced_by="build_transcript_contract",
         source=SourceDescriptor(source_type="transcript", source_id=source_name),
@@ -668,8 +753,12 @@ def build_transcript_contract(
                     "turn_count": preview.record_count,
                     "speaker_count": preview.entity_count,
                     "speakers": speakers,
+                    "speaker_sequence": [turn.speaker for turn in sanitized_turns],
+                    "turn_plan": _turn_plan_from_turns(sanitized_turns),
+                    "speaker_roles": _speaker_roles_from_turns(sanitized_turns),
                     "topic_terms": top_terms,
                     "synthetic_context": synthetic_context,
+                    "structured_ssot": structured_ssot,
                     "source_turn_hashes": [_hash_text(turn.text) for turn in sanitized_turns],
                     "source_ngram_hashes": _ngram_hashes(sanitized_turns),
                 },
@@ -706,21 +795,261 @@ def generate_synthetic_transcript(
     """Generate source-free synthetic interaction turns from contract metadata only."""
     entity = contract.entities[0] if contract.entities else None
     metadata = entity.metadata if entity else {}
-    source_speakers = list(metadata.get("speakers") or ["speaker_1", "speaker_2"])
-    speakers = _interaction_speaker_names(len(source_speakers))
     total = int(turn_count or metadata.get("turn_count") or 6)
     rng = random.Random(seed)
     topic_terms = [str(term) for term in metadata.get("topic_terms") or []]
     topic = _conversation_topic(topic_terms)
     synthetic_context = dict(metadata.get("synthetic_context") or {})
+    turn_plan = [row for row in metadata.get("turn_plan") or [] if isinstance(row, dict)]
+    speaker_roles = {str(key): str(value) for key, value in dict(metadata.get("speaker_roles") or {}).items()}
+    speakers = _speaker_sequence_for_generation(metadata, total)
     customer_templates, agent_templates = _conversation_templates(topic, synthetic_context)
     rows: list[dict[str, Any]] = []
+    speaker_occurrences: dict[str, int] = {}
+    used_texts: set[str] = set()
     for idx in range(max(1, total)):
-        speaker = speakers[idx % len(speakers)]
-        pool = agent_templates if speaker != "Customer" else customer_templates
-        text = _select_turn_text(pool, idx // len(speakers), rng)
+        speaker = speakers[idx]
+        role = speaker_roles.get(speaker) or ("customer" if _is_customer_speaker(speaker) else "agent")
+        pool = customer_templates if role == "customer" else agent_templates
+        sequence_index = speaker_occurrences.get(speaker, 0)
+        speaker_occurrences[speaker] = sequence_index + 1
+        text = _select_turn_text(pool, sequence_index, rng)
+        if idx < len(turn_plan):
+            text = _render_turn_from_plan(
+                base_text=text,
+                intent=str(turn_plan[idx].get("intent") or ""),
+                topic=topic,
+                role=role,
+                context=synthetic_context,
+                occurrence=sequence_index,
+                turn_index=idx,
+                total_turns=total,
+            )
+        if text in used_texts and idx < len(turn_plan):
+            variants = _intent_variants(
+                intent=str(turn_plan[idx].get("intent") or ""),
+                role=role,
+                topic=topic,
+                turn_index=idx,
+                total_turns=total,
+            )
+            alternatives = [variant for variant in variants if variant not in used_texts]
+            if alternatives:
+                text = alternatives[0]
+        used_texts.add(text)
         rows.append({"turn": idx + 1, "speaker": speaker, "timestamp": "", "text": text})
     return rows
+
+
+def _is_customer_speaker(speaker: str) -> bool:
+    return speaker.strip().lower() in {"customer", "caller", "user", "client", "member", "patient"}
+
+
+def _turn_plan_from_turns(turns: list[TranscriptTurn]) -> list[dict[str, str | int]]:
+    return [
+        {
+            "turn": idx + 1,
+            "speaker": turn.speaker,
+            "intent": _turn_intent(turn.text),
+            "role": _turn_role(turn.text, turn.speaker),
+        }
+        for idx, turn in enumerate(turns)
+    ]
+
+
+def _speaker_roles_from_turns(turns: list[TranscriptTurn]) -> dict[str, str]:
+    scores: dict[str, dict[str, int]] = {}
+    for turn in turns:
+        role = _turn_role(turn.text, turn.speaker)
+        bucket = scores.setdefault(turn.speaker, {"customer": 0, "agent": 0})
+        bucket[role] += 1
+    return {
+        speaker: "customer" if values["customer"] > values["agent"] else "agent"
+        for speaker, values in scores.items()
+    }
+
+
+def _turn_role(text: str, speaker: str) -> str:
+    speaker_lower = speaker.strip().lower()
+    if _is_customer_speaker(speaker):
+        return "customer"
+    if speaker_lower in {"agent", "supervisor", "specialist"}:
+        return "agent"
+    lower = text.lower()
+    customer_markers = (
+        "i'm calling",
+        "i am calling",
+        "i'm ",
+        "i am ",
+        "my name",
+        "my account",
+        "my request",
+        "my plan",
+        "i need",
+        "i have",
+        "i didn't",
+        "i never",
+        "i've never",
+        "unable to process",
+        "not giving me",
+        "it's ",
+        "with us",
+    )
+    agent_markers = (
+        "how may i help",
+        "how can i help",
+        "what is your",
+        "do you have",
+        "can i get",
+        "let me",
+        "one moment",
+        "pull up",
+        "provide me",
+        "i can help",
+        "i'll",
+        "we can",
+    )
+    customer_score = sum(marker in lower for marker in customer_markers)
+    agent_score = sum(marker in lower for marker in agent_markers)
+    if customer_score == agent_score == 0:
+        return "agent" if "?" in text else "customer"
+    return "customer" if customer_score > agent_score else "agent"
+
+
+def _turn_intent(text: str) -> str:
+    lower = text.lower()
+    if any(term in lower for term in ("thank you", "thanks", "good morning", "hello", "hi ")):
+        return "greeting or acknowledgment"
+    if any(term in lower for term in ("member id", "policy", "claim", "account", "reference", "number")):
+        return "identity or case lookup"
+    if any(term in lower for term in ("unable", "can't", "cannot", "issue", "problem", "not giving", "not working")):
+        return "problem description"
+    if any(term in lower for term in ("plan", "benefit", "coverage", "insurance", "provider")):
+        return "plan or benefit detail"
+    if any(term in lower for term in ("one moment", "pull up", "check", "look up", "review")):
+        return "agent investigation"
+    if any(term in lower for term in ("resolve", "fixed", "confirmed", "complete", "next step")):
+        return "resolution or next step"
+    return "conversation progress"
+
+
+def _speaker_sequence_for_generation(metadata: dict[str, Any], total: int) -> list[str]:
+    source_sequence = [str(value) for value in metadata.get("speaker_sequence") or [] if str(value).strip()]
+    if source_sequence:
+        labels = set(source_sequence)
+        if labels and labels <= {"Customer", "Agent"}:
+            first = source_sequence[0] if source_sequence[0] in {"Customer", "Agent"} else "Customer"
+            second = "Agent" if first == "Customer" else "Customer"
+            return [first if idx % 2 == 0 else second for idx in range(max(1, total))]
+        return [source_sequence[idx % len(source_sequence)] for idx in range(max(1, total))]
+    source_speakers = list(metadata.get("speakers") or ["speaker_1", "speaker_2"])
+    speakers = _interaction_speaker_names(len(source_speakers))
+    return [speakers[idx % len(speakers)] for idx in range(max(1, total))]
+
+
+def _render_turn_from_plan(
+    *,
+    base_text: str,
+    intent: str,
+    topic: str,
+    role: str,
+    context: dict[str, Any],
+    occurrence: int,
+    turn_index: int,
+    total_turns: int,
+) -> str:
+    if _text_has_synthetic_context(base_text, context):
+        return base_text
+    variants = _intent_variants(intent=intent, role=role, topic=topic, turn_index=turn_index, total_turns=total_turns)
+    if not variants:
+        return base_text
+    return variants[(occurrence + turn_index) % len(variants)]
+
+
+def _text_has_synthetic_context(text: str, context: dict[str, Any]) -> bool:
+    if "[MOCK_" in text:
+        return True
+    return any(
+        value and str(value) in text
+        for value in (
+            context.get("customer_name"),
+            context.get("policy_id"),
+            context.get("claim_id"),
+            context.get("tracking_id"),
+            context.get("email"),
+            context.get("phone"),
+            context.get("date_of_birth"),
+            context.get("vehicle_id"),
+        )
+    )
+
+
+def _intent_variants(
+    *,
+    intent: str,
+    role: str,
+    topic: str,
+    turn_index: int,
+    total_turns: int,
+) -> list[str]:
+    late_turn = turn_index >= max(0, total_turns - 2)
+    if late_turn and intent in {"conversation progress", "greeting or acknowledgment"}:
+        intent = "resolution or next step"
+    if role == "customer":
+        return {
+            "greeting or acknowledgment": [
+                f"Hi, I am calling about {topic} and need help with the next step.",
+                f"Thanks for taking the call. I want to sort out {topic}.",
+                f"Hello, I am trying to understand what to do next for {topic}.",
+            ],
+            "problem description": [
+                f"I am still seeing an issue with {topic}, and I need help figuring out the next step.",
+                f"The issue around {topic} is still not clear from my side.",
+                f"I tried to move forward with {topic}, but I still need support.",
+            ],
+            "plan or benefit detail": [
+                f"I want to understand the plan and benefit details for {topic}.",
+                f"Can you explain what applies to {topic} before I continue?",
+                f"I need to confirm which benefit details matter for {topic}.",
+            ],
+            "resolution or next step": [
+                "That answers my question. I understand the next step.",
+                "Thanks, that gives me what I need to continue.",
+                "Great, I am clear on what happens next.",
+            ],
+        }.get(intent, [])
+    return {
+        "greeting or acknowledgment": [
+            f"I can help with {topic}.",
+            f"Thanks for reaching out. I will review {topic} with you.",
+            f"Let me help you work through {topic}.",
+        ],
+        "problem description": [
+            f"I understand there is still an issue with {topic}. I will check what is blocking it.",
+            f"Let me review why {topic} is not moving forward as expected.",
+            f"I will look into the issue and keep the next step focused on {topic}.",
+        ],
+        "plan or benefit detail": [
+            f"Let me review the plan and benefit details for {topic}.",
+            f"I will check the applicable benefit information for {topic}.",
+            f"We can walk through the relevant plan details for {topic}.",
+        ],
+        "agent investigation": [
+            "I am checking the case details now and will confirm what I find.",
+            "Give me a moment while I review the available details.",
+            "I am looking through the record so I can give you the right next step.",
+        ],
+        "identity or case lookup": [
+            "I can use the verified details already on file to review the case.",
+            "I have enough verified information to continue reviewing the request.",
+            "I will use the verified case details to move this forward.",
+        ],
+        "resolution or next step": [
+            "The next step is confirmed, and the case is ready for review.",
+            "I have recorded the update and confirmed the follow-up path.",
+            "Everything needed for now is captured, and the next action is clear.",
+        ],
+    }.get(intent, [])
 
 
 def _interaction_speaker_names(count: int) -> list[str]:
@@ -735,6 +1064,14 @@ def _conversation_topic(topic_terms: list[str]) -> str:
         if term and not term.startswith("[") and len(term) > 2
     ]
     useful_set = set(useful_terms)
+    if {"activate", "activation"} & useful_set and "account" in useful_set:
+        return "the account activation"
+    if {"login", "logging", "password", "disabled"} & useful_set:
+        return "the login issue"
+    if {"charge", "charged", "payment", "card"} & useful_set:
+        return "the payment question"
+    if "benefit" in useful_set and ("order" in useful_set or "otc" in useful_set):
+        return "the benefit order"
     if "claim" in useful_set and "auto" in useful_set:
         return "the auto claim"
     if "claim" in useful_set and {"injury", "medical", "concussion"} & useful_set:
@@ -756,27 +1093,26 @@ def _context_customer_templates(topic: str, context: dict[str, Any]) -> list[str
     customer_name = context.get("customer_name")
     policy_id = context.get("policy_id")
     claim_id = context.get("claim_id") or context.get("tracking_id")
-    email = context.get("email")
-    phone = context.get("phone")
     vehicle_id = context.get("vehicle_id")
     templates = [
         _join_sentence_parts(
             "Hi, I need help understanding " + topic,
-            f"My name is {customer_name}" if customer_name else "",
-            f"my policy number is {policy_id}" if policy_id else "",
+            "my profile name is [MOCK_CUSTOMER_NAME]" if customer_name else "",
+            "my member or policy reference is [MOCK_POLICY_ID]" if policy_id else "",
         ),
         _join_sentence_parts(
             "Thanks",
-            f"You can reach me at {email}" if email else "",
-            f"or by phone at {phone}" if phone else "",
+            "please use the verified contact details already on file"
+            if context.get("email") or context.get("phone")
+            else "",
         ),
         _join_sentence_parts(
             "That helps",
-            f"I also want to make sure claim {claim_id} stays updated" if claim_id else "",
+            "I also want to make sure case [MOCK_CASE_ID] stays updated" if claim_id else "",
         ),
         _join_sentence_parts(
             "I appreciate the update",
-            f"The related vehicle reference I have is {vehicle_id}" if vehicle_id else "",
+            "the related item reference is [MOCK_REFERENCE_ID]" if vehicle_id else "",
         ),
         "Great, that answers my question.",
     ]
@@ -793,17 +1129,17 @@ def _context_agent_templates(topic: str, context: dict[str, Any]) -> list[str]:
     templates = [
         _join_sentence_parts(
             "I can help with " + topic,
-            f"I have the synthetic profile for {customer_name}" if customer_name else "",
-            f"under policy {policy_id}" if policy_id else "",
+            "I have the mock customer profile open" if customer_name else "",
+            "under reference [MOCK_POLICY_ID]" if policy_id else "",
         ),
         _join_sentence_parts(
             "I confirmed the contact and identity details",
-            f"including date of birth {dob}" if dob else "",
+            "including [MOCK_DATE_OF_BIRTH]" if dob else "",
             "I will route the update to the right team",
         ),
         _join_sentence_parts(
             "Everything needed for now has been captured in the synthetic case notes",
-            f"with claim reference {claim_id}" if claim_id else "",
+            "with case reference [MOCK_CASE_ID]" if claim_id else "",
         ),
         _join_sentence_parts(
             "You do not need to provide anything else at this point",
@@ -885,14 +1221,20 @@ def validate_transcript_non_replay(
             max_self_similarity = max(max_self_similarity, similarity)
 
     repeated_phrase_warning = max_self_similarity >= similarity_threshold
+    privacy_findings = _synthetic_privacy_findings(synthetic_texts)
     base_passed = not exact_replays and not ngram_replays
     nvidia_options = nvidia_options or {}
-    guardrails_result = run_guardrails_transcript_check(
+    guardrails_result = _run_guardrails_transcript_check(
         synthetic_turns,
         enabled=bool(nvidia_options.get("enabled", False)),
         config_path=str(nvidia_options.get("guardrails_config_path") or ""),
     )
-    passed = base_passed and guardrails_result.get("passed") is not False
+    passed = (
+        base_passed
+        and not repeated_phrase_warning
+        and not privacy_findings
+        and guardrails_result.get("passed") is not False
+    )
     return {
         "passed": passed,
         "exact_replay_count": len(exact_replays),
@@ -900,6 +1242,31 @@ def validate_transcript_non_replay(
         "max_self_similarity": round(max_self_similarity, 6),
         "variety_warning_threshold": similarity_threshold,
         "repeated_phrase_warning": repeated_phrase_warning,
+        "privacy_findings": privacy_findings,
         "raw_source_text_used": False,
         "nvidia_nemo_guardrails": guardrails_result,
     }
+
+
+def _synthetic_privacy_findings(texts: list[str]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for turn_index, text in enumerate(texts, start=1):
+        cleaned = re.sub(r"\[MOCK_[A-Z0-9_]+\]", "", text)
+        labels = []
+        if _EMAIL.search(cleaned):
+            labels.append("email")
+        if _PHONE.search(cleaned):
+            labels.append("phone")
+        if _SSN.search(cleaned):
+            labels.append("ssn")
+        if _CARD.search(cleaned):
+            labels.append("card")
+        if re.search(
+            r"\b(?:acct|account|policy|claim|case|member)(?:\s+(?:id|number|reference))?\s*[:#-]\s*[A-Z0-9-]*\d[A-Z0-9-]{3,}\b",
+            cleaned,
+            flags=re.IGNORECASE,
+        ):
+            labels.append("identifier")
+        if labels:
+            findings.append({"turn": turn_index, "types": sorted(set(labels))})
+    return findings

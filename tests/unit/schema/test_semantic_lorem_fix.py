@@ -105,3 +105,31 @@ def test_infer_relationships_from_column_names_plural_tables():
         ("customers", "accounts", "customer_id"),
         ("accounts", "cards", "account_id"),
     }
+
+
+def test_banking_sql_names_get_realistic_semantics():
+    schema = SchemaConfig(
+        name="schema",
+        tables=[Table(name="branches", row_count=10), Table(name="loans", row_count=10)],
+        columns={
+            "branches": [
+                Column(name="branch_name", type="text"),
+                Column(name="manager_name", type="text"),
+            ],
+            "loans": [
+                Column(name="loan_amount", type="float"),
+                Column(name="interest_rate", type="float"),
+            ],
+        },
+    )
+
+    enriched = enrich_schema_semantics(schema)
+    branches = {c.name: c for c in enriched.columns["branches"]}
+    loans = {c.name: c for c in enriched.columns["loans"]}
+
+    assert branches["branch_name"].distribution_params["text_type"] == "company"
+    assert branches["manager_name"].distribution_params["text_type"] == "name"
+    assert loans["loan_amount"].distribution_params["min"] == 0
+    assert loans["loan_amount"].distribution_params["max"] == 1000
+    assert loans["interest_rate"].distribution_params["min"] == 1.0
+    assert loans["interest_rate"].distribution_params["max"] == 24.99

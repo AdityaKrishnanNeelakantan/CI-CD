@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import importlib.machinery
 import json
 import re
+import sys
+import types
 
+import pandas as pd
+
+from synth_platform.engine.transcripts import ssot_designer
 from synth_platform.engine.transcripts import (
     build_transcript_contract,
     generate_synthetic_transcript,
@@ -10,6 +16,107 @@ from synth_platform.engine.transcripts import (
     summarize_transcript_preview,
     validate_transcript_non_replay,
 )
+
+
+def _install_fake_transcript_ssot_data_designer(monkeypatch):
+    monkeypatch.setenv("SP_PLATFORM_SLM_PREFLIGHT", "0")
+    captured: dict[str, object] = {}
+
+    class FakeModelProvider:
+        def __init__(self, **kwargs):
+            captured["model_provider"] = kwargs
+
+    class FakeModelConfig:
+        def __init__(self, **kwargs):
+            captured["model_config"] = kwargs
+
+    class FakeChatCompletionInferenceParams:
+        def __init__(self, **kwargs):
+            captured["inference_parameters"] = kwargs
+
+    class FakeDataFrameSeedSource:
+        def __init__(self, df):
+            captured["seed_frame"] = df
+
+    class FakeLLMStructuredColumnConfig:
+        def __init__(self, **kwargs):
+            captured["structured_column"] = kwargs
+            self.kwargs = kwargs
+
+    class FakeLocalCallableValidatorParams:
+        def __init__(self, **kwargs):
+            captured["validator_params"] = kwargs
+            self.validation_function = kwargs["validation_function"]
+
+    class FakeValidationColumnConfig:
+        def __init__(self, **kwargs):
+            captured["validation_column"] = kwargs
+            self.kwargs = kwargs
+
+    class FakeDataDesignerConfigBuilder:
+        def __init__(self, model_configs=None):
+            captured["builder_model_configs"] = model_configs
+
+        def with_seed_dataset(self, source):
+            captured["seed_source"] = source
+            return self
+
+        def add_column(self, column):
+            captured.setdefault("columns", []).append(column)
+            return self
+
+    class FakeDataDesigner:
+        def __init__(self, **kwargs):
+            captured["data_designer"] = kwargs
+
+        def preview(self, _builder, *, num_records):
+            captured["preview_num_records"] = num_records
+            if captured.get("preview_exception"):
+                raise RuntimeError(str(captured["preview_exception"]))
+            payload = {
+                "metadata": {
+                    "source_transcript_id": "chat.txt",
+                    "channel": "chat",
+                    "version": "1.0.0",
+                },
+                "entities": {
+                    "customer": {"role": "requester"},
+                    "agent": {"role": "support"},
+                },
+                "support_context": {"source": "sanitized_transcript_contract"},
+                "resolved_issues": [{"issue_type": "access_error", "resolution_status": "resolved"}],
+                "actions_taken": [{"action": "plan_change", "new_value": "synthetic_enterprise"}],
+                "account_mutations": [{"action": "plan_change", "new_value": "synthetic_enterprise"}],
+                "sentiment_analysis": {"initial_customer_sentiment": "frustrated", "final_customer_sentiment": "satisfied"},
+                "privacy_validation": {"raw_source_text_used": False},
+            }
+            validator = captured["validation_column"]["validator_params"].validation_function
+            records = [{"synthetic_twin_ssot": payload}]
+            validation = validator(pd.DataFrame(records)).to_dict(orient="records")
+            records[0]["synthetic_twin_ssot_validation"] = validation[0]
+            return types.SimpleNamespace(dataset=pd.DataFrame(records))
+
+    fake_config = types.SimpleNamespace(
+        ModelProvider=FakeModelProvider,
+        ModelConfig=FakeModelConfig,
+        ChatCompletionInferenceParams=FakeChatCompletionInferenceParams,
+        DataFrameSeedSource=FakeDataFrameSeedSource,
+        LLMStructuredColumnConfig=FakeLLMStructuredColumnConfig,
+        LocalCallableValidatorParams=FakeLocalCallableValidatorParams,
+        ValidationColumnConfig=FakeValidationColumnConfig,
+        ValidatorType=types.SimpleNamespace(LOCAL_CALLABLE="local_callable"),
+        DataDesignerConfigBuilder=FakeDataDesignerConfigBuilder,
+    )
+    fake_interface = types.SimpleNamespace(DataDesigner=FakeDataDesigner)
+    fake_package = types.ModuleType("data_designer")
+    fake_package.__path__ = []
+    fake_package.__spec__ = importlib.machinery.ModuleSpec("data_designer", loader=None, is_package=True)
+    fake_package.config = fake_config
+    fake_package.interface = fake_interface
+    monkeypatch.setitem(sys.modules, "data_designer", fake_package)
+    monkeypatch.setitem(sys.modules, "data_designer.config", fake_config)
+    monkeypatch.setitem(sys.modules, "data_designer.interface", fake_interface)
+    return captured
 
 
 def test_transcript_preview_is_sanitized_and_counts_turns_speakers():
@@ -158,13 +265,17 @@ def test_customer_claim_interaction_preview_and_topic_are_sanitized():
     context = contract.entities[0].metadata["synthetic_context"]
     synthetic = generate_synthetic_transcript(contract, turn_count=6, seed=1)
     synthetic_text = " ".join(row["text"] for row in synthetic)
-    assert "auto claim" in synthetic[0]["text"]
-    assert context["customer_name"] in synthetic_text
-    assert context["policy_id"] in synthetic_text
-    assert context["email"] in synthetic_text
-    assert context["phone"] in synthetic_text
-    assert context["date_of_birth"] in synthetic_text
-    assert (context.get("claim_id") or context.get("tracking_id")) in synthetic_text
+    assert "claim" in synthetic_text.lower() or "vehicle" in synthetic_text.lower()
+    assert "[MOCK_CUSTOMER_NAME]" in synthetic_text
+    assert "[MOCK_POLICY_ID]" in synthetic_text
+    assert "[MOCK_DATE_OF_BIRTH]" in synthetic_text
+    assert "[MOCK_CASE_ID]" in synthetic_text
+    assert context["customer_name"] not in synthetic_text
+    assert context["policy_id"] not in synthetic_text
+    assert context["email"] not in synthetic_text
+    assert context["phone"] not in synthetic_text
+    assert context["date_of_birth"] not in synthetic_text
+    assert (context.get("claim_id") or context.get("tracking_id")) not in synthetic_text
     assert "Timothy Brooks" not in synthetic_text
     assert "INS-441-B83" not in synthetic_text
     assert "555-012-9988" not in synthetic_text
@@ -186,6 +297,141 @@ def test_transcript_contract_uses_same_canonical_contract_shape():
     serialized = json.dumps(contract.model_dump(mode="json"))
     assert "alex@example.com" not in serialized
     assert "source_turn_hashes" in serialized
+
+
+def test_transcript_contract_can_use_data_designer_structured_ssot(monkeypatch):
+    captured = _install_fake_transcript_ssot_data_designer(monkeypatch)
+    monkeypatch.delenv("SP_NEMO_DATA_DESIGNER_API_KEY", raising=False)
+
+    contract = build_transcript_contract(
+        "Agent: I can help with the dashboard access error.\n"
+        "Customer: Please upgrade the plan after access is fixed.",
+        source_name="chat.txt",
+        nvidia_options={"enabled": True},
+    )
+
+    ssot = contract.entities[0].metadata["structured_ssot"]
+    assert ssot["status"] == "generated", ssot
+    assert ssot["resolved_issues"][0]["issue_type"] == "access_error"
+    assert ssot["account_mutations"][0]["action"] == "plan_change"
+    assert captured["structured_column"]["name"] == "synthetic_twin_ssot"
+    assert captured["structured_column"]["model_alias"] == "transcript-ssot-builder"
+    assert captured["validation_column"]["target_columns"] == ["synthetic_twin_ssot"]
+    assert captured["model_provider"]["endpoint"] == "http://127.0.0.1:11434/v1"
+    assert captured["model_provider"]["api_key"] is None
+    assert "provider" not in ssot
+    assert "model" not in ssot
+
+
+def test_transcript_contract_can_defer_structured_ssot_for_fast_ui_build(monkeypatch):
+    captured = _install_fake_transcript_ssot_data_designer(monkeypatch)
+    monkeypatch.delenv("SP_NEMO_DATA_DESIGNER_API_KEY", raising=False)
+
+    contract = build_transcript_contract(
+        "Agent: I can help with the dashboard access error.\n"
+        "Customer: Please upgrade the plan after access is fixed.",
+        source_name="chat.txt",
+        nvidia_options={"enabled": True, "build_structured_ssot": False},
+    )
+
+    ssot = contract.entities[0].metadata["structured_ssot"]
+    assert ssot == {"status": "pending", "reason": "deferred_until_generation"}
+    assert "preview_num_records" not in captured
+
+
+def test_transcript_ssot_fallback_is_generated_and_records_sdk_error():
+    turns = parse_transcript_text(
+        "Agent: I can review the card charge.\n"
+        "Customer: I do not recognize the payment."
+    )
+
+    payload = ssot_designer._fallback_generated_ssot(turns, source_name="charge.txt", reason="bad structured output")
+
+    assert payload["status"] == "generated"
+    assert payload["metadata"]["sdk_generation_fallback"] == "source_derived_contract"
+    assert payload["metadata"]["sdk_generation_error"] == "bad structured output"
+    assert payload["metadata"]["source_pipeline"]["ssot_builder"] == "source_derived_contract"
+    assert payload["support_context"]["issue_type"] == "payment_charge_investigation"
+
+
+def test_transcript_ssot_schema_uses_explicit_entity_and_evidence_fields():
+    schema = ssot_designer._ssot_schema()
+
+    assert schema["properties"]["entities"]["properties"]["participants"]["items"]["additionalProperties"] is False
+    assert "additionalProperties" not in schema["properties"]["entities"]["properties"]["participants"]["items"]["properties"]
+    assert schema["properties"]["support_context"]["additionalProperties"] is False
+    assert schema["properties"]["privacy_validation"]["additionalProperties"] is False
+    serialized = json.dumps(schema)
+    assert '"additionalProperties": {"type"' not in serialized
+
+
+def test_transcript_ssot_enrichment_normalizes_sdk_participants_shape():
+    turns = parse_transcript_text(
+        "Agent: I can review the card charge.\n"
+        "Customer: I do not recognize the payment."
+    )
+    payload = {
+        "entities": {
+            "participants": [
+                {"speaker": "Agent", "role": "support_representative"},
+                {"speaker": "Customer", "role": "requester"},
+            ]
+        },
+        "support_context": {"source": "sanitized_transcript_contract", "topic_terms": ["charge", "payment"]},
+    }
+
+    enriched = ssot_designer._enrich_ssot_payload(payload, turns, source_name="charge.txt")
+
+    assert enriched["entities"] == {
+        "agent": {"role": "support_representative"},
+        "customer": {"role": "requester"},
+    }
+    assert enriched["support_context"]["topic_terms"] == "charge, payment"
+    assert enriched["metadata"]["source_pipeline"]["asr_engine"] == "upstream_riva_or_existing_transcript"
+
+
+def test_transcript_ssot_uses_sdk_for_large_local_slm_inputs(monkeypatch):
+    captured = _install_fake_transcript_ssot_data_designer(monkeypatch)
+    monkeypatch.setenv("SP_TRANSCRIPT_SSOT_SDK_MAX_TURNS", "2")
+    monkeypatch.delenv("SP_NEMO_DATA_DESIGNER_MOCK", raising=False)
+    monkeypatch.delenv("SP_TRANSCRIPT_SSOT_SOURCE_FALLBACK", raising=False)
+    turns = parse_transcript_text(
+        "Agent: I can review the card charge.\n"
+        "Customer: I do not recognize the payment.\n"
+        "Agent: I will check the payment history."
+    )
+
+    payload = ssot_designer.build_transcript_ssot_with_data_designer(
+        turns,
+        source_name="charge.txt",
+        enabled=True,
+    )
+
+    assert payload["status"] == "generated"
+    assert "sdk_generation_fallback" not in payload["metadata"]
+    assert payload["support_context"]["issue_type"] == "payment_charge_investigation"
+    assert captured["preview_num_records"] == 1
+
+
+def test_transcript_ssot_reports_sdk_failure_without_source_fallback(monkeypatch):
+    captured = _install_fake_transcript_ssot_data_designer(monkeypatch)
+    monkeypatch.delenv("SP_TRANSCRIPT_SSOT_SOURCE_FALLBACK", raising=False)
+    turns = parse_transcript_text(
+        "Agent: I can review the card charge.\n"
+        "Customer: I do not recognize the payment."
+    )
+
+    captured["preview_exception"] = "bad structured output"
+    payload = ssot_designer.build_transcript_ssot_with_data_designer(
+        turns,
+        source_name="charge.txt",
+        enabled=True,
+    )
+
+    assert payload["status"] == "failed"
+    assert payload["stage"] == "sdk_preview"
+    assert payload["metadata"]["source_pipeline"]["ssot_builder"] == "nemo_data_designer_local_slm"
+    assert "sdk_generation_fallback" not in payload["metadata"]
 
 
 def test_transcript_parser_accepts_json_turn_arrays():
@@ -242,17 +488,89 @@ def test_transcript_generation_is_role_ordered_and_topic_aware():
     synthetic = generate_synthetic_transcript(contract, turn_count=6, seed=1)
 
     assert [row["speaker"] for row in synthetic] == [
-        "Customer",
         "Agent",
         "Customer",
         "Agent",
+        "Customer",
+        "Agent",
+        "Customer",
+    ]
+    assert "help with" in synthetic[0]["text"] or "verified details" in synthetic[0]["text"]
+    assert "claim" in " ".join(row["text"] for row in synthetic).lower()
+    assert "You're welcome" not in synthetic[0]["text"]
+
+
+def test_transcript_generation_preserves_source_speaker_sequence_and_turn_intents():
+    contract = build_transcript_contract(
+        "Customer: Thank you for calling line.\n"
+        "Agent: I see the request is not processing.\n"
+        "Person 3: What health plan do you have?\n"
+        "Person 4: Blue Cross Blue Shield plan.\n",
+        source_name="multi.txt",
+    )
+
+    synthetic = generate_synthetic_transcript(contract, turn_count=6, seed=1)
+
+    assert contract.entities[0].metadata["speaker_sequence"] == [
+        "Customer",
+        "Agent",
+        "Person 3",
+        "Person 4",
+    ]
+    assert [row["speaker"] for row in synthetic] == [
+        "Customer",
+        "Agent",
+        "Person 3",
+        "Person 4",
         "Customer",
         "Agent",
     ]
-    assert synthetic[0]["text"].startswith("Hi, I need help")
-    assert "help with" in synthetic[1]["text"]
-    assert "claim" in " ".join(row["text"] for row in synthetic).lower()
-    assert "You're welcome" not in synthetic[0]["text"]
+    joined = " ".join(row["text"] for row in synthetic).lower()
+    assert "plan" in joined or "benefit" in joined
+
+
+def test_transcript_contract_maps_quoted_internal_external_to_roles():
+    contract = build_transcript_contract(
+        "'internal : Thank you for calling support. How can I help?',\n"
+        "\"external : I have a credit card charge question.\",\n"
+        "'internal : I can review the charge.'",
+        source_name="quoted_call.txt",
+    )
+    metadata = contract.entities[0].metadata
+
+    assert metadata["speakers"] == ["Agent", "Customer"]
+    assert metadata["speaker_roles"] == {"Agent": "agent", "Customer": "customer"}
+    assert "charge" in metadata["topic_terms"]
+
+
+def test_current_transcript_generation_alternates_two_role_call_fragments():
+    contract = build_transcript_contract(
+        "internal : Thank you for calling support. How can I help?\n"
+        "external : I have a card charge question.\n"
+        "external : I do not recognize the amount.\n"
+        "internal : Let me review that.",
+        source_name="call.txt",
+    )
+
+    synthetic = generate_synthetic_transcript(contract, turn_count=6, seed=1)
+
+    assert [row["speaker"] for row in synthetic] == ["Agent", "Customer", "Agent", "Customer", "Agent", "Customer"]
+    assert "payment" in " ".join(row["text"] for row in synthetic).lower()
+
+
+def test_transcript_topic_ignores_call_filler_words():
+    contract = build_transcript_contract(
+        "Agent: Okay yeah, one moment while I look up the account.\n"
+        "Customer: I am trying to activate my account for the OTC benefit order.\n"
+        "Agent: Sure, yes, I can help with account activation.",
+        source_name="chat.txt",
+    )
+
+    synthetic = generate_synthetic_transcript(contract, turn_count=2, seed=1)
+    joined = " ".join(row["text"] for row in synthetic).lower()
+
+    assert "account activation" in joined
+    assert "okay yeah request" not in joined
 
 
 def test_transcript_default_generation_is_not_self_repetitive():
@@ -268,7 +586,7 @@ def test_transcript_default_generation_is_not_self_repetitive():
     assert report["max_self_similarity"] < report["variety_warning_threshold"]
 
 
-def test_repeated_synthetic_phrasing_is_variety_warning_not_replay_failure():
+def test_repeated_synthetic_phrasing_is_quality_failure_not_replay():
     contract = build_transcript_contract(
         "Agent: Please explain your request\nCustomer: I need support",
         source_name="chat.txt",
@@ -280,11 +598,25 @@ def test_repeated_synthetic_phrasing_is_variety_warning_not_replay_failure():
 
     report = validate_transcript_non_replay(contract, synthetic)
 
-    assert report["passed"] is True
+    assert report["passed"] is False
     assert report["exact_replay_count"] == 0
     assert report["ngram_replay_count"] == 0
     assert report["max_self_similarity"] == 1
     assert report["repeated_phrase_warning"] is True
+
+
+def test_transcript_validation_flags_privacy_like_generated_values():
+    contract = build_transcript_contract(
+        "Agent: Please explain your request\nCustomer: I need support",
+        source_name="chat.txt",
+    )
+    report = validate_transcript_non_replay(
+        contract,
+        [{"turn": 1, "speaker": "Customer", "text": "Please call me at 555-123-4567 about account: ABCD-12345."}],
+    )
+
+    assert report["passed"] is False
+    assert report["privacy_findings"] == [{"turn": 1, "types": ["identifier", "phone"]}]
 
 
 def test_transcript_validation_flags_exact_source_replay_by_hash():

@@ -41,14 +41,14 @@ INTERACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "secret",
         re.compile(
             r"(?i)\b(?:password|passcode|pin|otp|token|secret)"
-            r"\s*(?:is|=|:)\s*(?![\"'])([^\s,;]{4,128})"
+            r"\s*(?:is|=|:)\s*(?![\"'\[])([^\s,;]{4,128})"
         ),
     ),
     (
         "secret",
         re.compile(
             r"(?i)\b(?:password|passcode|pin|otp|token|secret)\s+"
-            r"(?![\"'])(?=[^\s,;]{4,128}(?:\s|[,;]|$))"
+            r"(?![\"'\[])(?=[^\s,;]{4,128}(?:\s|[,;]|$))"
             r"(?=[^\s,;]*[0-9@#$%^&*_=+:/\\-])([^\s,;]{4,128})"
         ),
     ),

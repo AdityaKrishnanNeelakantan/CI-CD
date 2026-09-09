@@ -1,5 +1,23 @@
 # Internal Dependencies and Data Flow
 
+## Unified chat routing
+
+```text
+interfaces/streamlit/pages/chat.py
+      │
+      ▼
+application/coordinator (pure capability selection)
+      │
+      ▼
+interfaces/streamlit/capabilities.py (page hand-off only)
+      │
+      ├─► existing Schema workflow
+      ├─► existing Database workflow
+      └─► existing PDF/Document workflow
+```
+
+The coordinator does not import Streamlit, engine services, infrastructure, or workflow pages. It reports Customer Interaction Twin as planned because no implementation exists. Workflow orchestration starts only after capability selection; MCP and the live-agent plane are not active dependencies.
+
 ## Canonical workflow entry points
 
 | Workflow | UI | Application facade |

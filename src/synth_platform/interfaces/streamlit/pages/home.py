@@ -1,4 +1,4 @@
-"""Landing page — choose an operating mode of the Synthetic Data Twin Platform."""
+"""Architecture and capability overview for the Synthetic Data Twin Platform."""
 
 from __future__ import annotations
 
@@ -11,33 +11,44 @@ from synth_platform.interfaces.streamlit.components.common.ux import platform_in
 st.title("Synthetic Data Twin Platform")
 platform_intro()
 
-st.markdown("### What would you like to create?")
-st.write("One platform. Three modes. Pick the path that matches what you have.")
+st.markdown("### One entry point, specialized workflow capabilities")
+st.write(
+    "Start in Chat to route a request. The coordinator selects a capability but does not "
+    "generate data, train models, validate outputs, or package artifacts."
+)
+st.page_link(
+    str(Path(__file__).resolve().parent / "chat.py"),
+    label="Open unified Chat",
+    icon=":material/chat:",
+)
 
-c1, c2, c3 = st.columns(3)
+st.markdown("### Capabilities")
+c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    st.markdown("#### Schema Mode")
+    st.markdown("#### Schema Twin")
     st.write("Create synthetic data from structure alone.")
-    st.caption("Provide schema → review → configure → generate → validate → download")
-    st.page_link(str(Path(__file__).resolve().parent / "schema_twin.py"), label="Open Schema Mode", icon=":material/schema:")
+    st.caption("Schema → configure → generate → validate → download")
 
 with c2:
     st.markdown("#### Database Twin")
-    st.write("Learn from an existing database and generate a portable synthetic twin.")
-    st.caption("Connect → understand → train → disconnect → generate → validate → export")
-    st.page_link(str(Path(__file__).resolve().parent / "database_twin.py"), label="Open Database Twin", icon=":material/database:")
+    st.write("Learn from an existing database and create a portable synthetic twin.")
+    st.caption("Discover → train → disconnect → generate → validate → export")
 
 with c3:
-    st.markdown("#### PDF Twin")
-    st.write("Create synthetic documents while preserving useful document structure.")
-    st.caption("Upload → understand → generate → validate → download")
-    st.page_link(str(Path(__file__).resolve().parent / "pdf_twin.py"), label="Open PDF Twin", icon=":material/description:")
+    st.markdown("#### Document Twin")
+    st.write("Create synthetic PDFs while preserving useful document structure.")
+    st.caption("Extract → bind → generate → render → validate")
+
+with c4:
+    st.markdown("#### Interaction Twin")
+    st.write("Target capability for structured, privacy-safe customer interactions.")
+    st.caption("Planned — no implementation exists in this repository yet")
 
 st.divider()
-with st.expander("Technical details", expanded=False):
+with st.expander("Architecture boundary", expanded=False):
     st.caption(
-        "Shared stages behind the modes: discovery → understanding → twin creation → "
-        "validation → export. Schema Mode uses metadata only; Database Twin trains a "
-        "portable artifact; PDF Twin preserves layout structure with synthetic values."
+        "Chat coordination, workflow orchestration, and model-backed generation are separate "
+        "responsibilities. Existing workflow stages remain authoritative. MCP, a live-agent "
+        "plane, and unified evaluation are later phases, not current runtime components."
     )

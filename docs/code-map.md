@@ -2,6 +2,18 @@
 
 This is the active `src/synth_platform` Python inventory after consolidation. Files under `archive/legacy/` are intentionally excluded.
 
+## Application coordinator
+
+**3 Python files**
+
+```text
+application/coordinator/__init__.py
+application/coordinator/contracts.py
+application/coordinator/router.py
+```
+
+The coordinator selects a registered capability only. Streamlit page hand-off remains under `interfaces/streamlit/capabilities.py`, and `interfaces/streamlit/pages/chat.py` is the chat-first entry page.
+
 ## Application workflows
 
 **4 Python files**

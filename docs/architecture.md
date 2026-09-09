@@ -2,7 +2,11 @@
 
 ## Purpose
 
-This repository uses a single canonical package, `synth_platform`, for all three user-facing workflows. The architecture separates **what the product does** (workflows/use cases/domain) from **how it talks to external systems** (infrastructure) and **how users invoke it** (interfaces).
+This repository uses a single canonical package, `synth_platform`, for all three implemented user-facing workflows. The architecture separates **what the product does** (workflows/use cases/domain) from **how it talks to external systems** (infrastructure) and **how users invoke it** (interfaces).
+
+The default Streamlit entry point is a unified Chat page backed by a thin, deterministic capability coordinator. The coordinator routes to Schema, Database, or Document/PDF Twin; it does not reproduce their generation, training, validation, or packaging logic. Customer Interaction Twin is a planned target capability with no implementation in this repository.
+
+The larger cross-domain target architecture also includes a separate live-agent plane, MCP tool gateway, shared governance/evaluation, and internal model platform. Those are transition targets rather than current runtime components. See `unified-chat-transition.md` for phase boundaries.
 
 ## Layers
 
@@ -12,9 +16,10 @@ Entry points only: Streamlit, REST API, CLI, and SDK. Interface code translates 
 ### `application/`
 Coordinates product behavior.
 
-- `workflows/` exposes one stable facade per product workflow.
+- `coordinator/` selects a registered product capability through protocol-independent contracts; it never executes workflow stages.
+- `workflows/` exposes one stable facade per implemented product workflow.
 - `use_cases/` exposes reusable application operations.
-- `orchestration/` owns stage sequencing, state, and checkpoint coordination.
+- `orchestration/` owns stage sequencing, state, and checkpoint coordination after a workflow has been selected.
 - `ports/` defines abstractions that infrastructure can implement.
 - `dto/` contains boundary data-transfer objects.
 

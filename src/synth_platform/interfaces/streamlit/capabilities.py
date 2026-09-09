@@ -11,6 +11,7 @@ _CAPABILITY_PAGES = {
     CapabilityId.SCHEMA_TWIN: _PAGES_DIR / "schema_twin.py",
     CapabilityId.DATABASE_TWIN: _PAGES_DIR / "database_twin.py",
     CapabilityId.DOCUMENT_TWIN: _PAGES_DIR / "pdf_twin.py",
+    CapabilityId.INTERACTION_TWIN: _PAGES_DIR / "interaction_twin.py",
 }
 
 

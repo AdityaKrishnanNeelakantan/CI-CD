@@ -16,11 +16,12 @@ The coordinator selects a registered capability only. Streamlit page hand-off re
 
 ## Application workflows
 
-**4 Python files**
+**5 Python files**
 
 ```text
 application/workflows/__init__.py
 application/workflows/database_twin.py
+application/workflows/interaction_twin.py
 application/workflows/pdf_twin.py
 application/workflows/schema_twin.py
 ```
@@ -76,7 +77,7 @@ application/orchestration/workflow.py
 
 ## Domain
 
-**63 Python files**
+**65 Python files**
 
 ```text
 domain/__init__.py
@@ -102,6 +103,8 @@ domain/generation/__init__.py
 domain/generation/conditional.py
 domain/generation/models.py
 domain/inference/__init__.py
+domain/interactions/__init__.py
+domain/interactions/models.py
 domain/planning/__init__.py
 domain/planning/compiler.py
 domain/planning/models.py
@@ -405,6 +408,18 @@ engine/documents/pdf/validation_service.py
 engine/documents/pdf/value_generator.py
 ```
 
+## Interaction engine
+
+**3 Python files**
+
+```text
+engine/interactions/__init__.py
+engine/interactions/patterns.py
+engine/interactions/service.py
+```
+
+This engine owns deterministic transcript parsing, typed sanitization, participant pseudonymization, semantic fallback, strict SSOT construction, and privacy/source-replay validation. Optional model invocation and artifact packaging remain in the application workflow facade.
+
 ## Shared engine support
 
 **21 Python files**
@@ -501,7 +516,7 @@ infrastructure/storage/s3.py
 
 ## Interfaces
 
-**34 Python files**
+**39 Python files**
 
 ```text
 interfaces/__init__.py
@@ -521,20 +536,25 @@ interfaces/cli/commands/__init__.py
 interfaces/cli/commands/generate.py
 interfaces/cli/commands/train.py
 interfaces/cli/commands/validate.py
+interfaces/cli/production_readiness.py
 interfaces/sdk/__init__.py
 interfaces/sdk/client.py
 interfaces/sdk/models.py
 interfaces/streamlit/__init__.py
 interfaces/streamlit/app.py
+interfaces/streamlit/capabilities.py
 interfaces/streamlit/components/common/__init__.py
 interfaces/streamlit/components/common/intent_presets.py
 interfaces/streamlit/components/common/ux.py
 interfaces/streamlit/components/database/__init__.py
 interfaces/streamlit/components/pdf/__init__.py
 interfaces/streamlit/components/schema/__init__.py
+interfaces/streamlit/launcher.py
 interfaces/streamlit/pages/__init__.py
+interfaces/streamlit/pages/chat.py
 interfaces/streamlit/pages/database_twin.py
 interfaces/streamlit/pages/home.py
+interfaces/streamlit/pages/interaction_twin.py
 interfaces/streamlit/pages/pdf_twin.py
 interfaces/streamlit/pages/schema_twin.py
 interfaces/streamlit/state.py

@@ -1,10 +1,10 @@
 # Synth Platform
 
 Synth Platform is a synthetic-data intelligence platform with a chat-first entry
-point for specialized Schema, Database, and Document/PDF Twin workflows. A thin,
-deterministic coordinator selects a workflow; the workflow remains responsible
-for generation, training, repair, validation, privacy controls, and artifact
-packaging.
+point for specialized Schema, Database, Document/PDF, and Customer Interaction
+Twin workflows. A thin, deterministic coordinator selects a workflow; the
+workflow remains responsible for generation or structured extraction, repair,
+validation, privacy controls, and artifact packaging.
 
 ```text
 Chat UI -> Capability Coordinator -> Existing Workflow -> Validation -> Artifacts
@@ -24,11 +24,13 @@ Discover -> Understand -> Contract -> Learn -> Generate -> Validate -> Package
 | Schema Twin | Implemented | Schema normalization, deterministic generation, relational validation, and CSV/Parquet packaging |
 | Database Twin | Implemented | Discovery, profiling, statistical training, portable artifacts, relational generation, QA, and target write |
 | Document Twin | Implemented for PDF | Extraction, template compilation, semantic binding, synthetic values, rendering, and layout/content validation |
-| Customer Interaction Twin | Planned | No active workflow exists; the coordinator fails closed rather than substituting another workflow |
+| Customer Interaction Twin | Implemented | TXT/LOG parsing, source sanitization, one structured SSOT, privacy/source-replay validation, and checksummed ZIP packaging |
 | Production readiness CLI | Implemented | Local dependency, version, workflow, storage, signing, OCR, and optional-capability checks |
 | NVIDIA/Data Designer adapter | Planned | Dependencies can be installed, but no application adapter is implemented yet |
 | MCP/Faker-as-a-Tool and live service agents | Planned | Target architecture only; not part of the active runtime |
 | Unified governance/evaluation and enterprise security plane | Planned | Existing workflow validators and artifact signing remain authoritative until shared services are implemented |
+
+Customer Interaction Twin turns one pasted or uploaded `.txt`/`.log` transcript into one structured interaction SSOT. It sanitizes sensitive values before optional model use, validates privacy and source-replay risks, and releases a checksummed ZIP containing only the sanitized source, SSOT, validation report, and manifest. Raw transcript text is not persisted. See [`docs/workflows/interaction-twin.md`](docs/workflows/interaction-twin.md).
 
 The attached cross-domain, air-gapped architecture diagrams are treated as a
 target architecture. Installing an NVIDIA, NeMo, MCP, or agent dependency does

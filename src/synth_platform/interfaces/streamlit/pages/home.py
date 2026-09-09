@@ -42,8 +42,10 @@ with c3:
 
 with c4:
     st.markdown("#### Interaction Twin")
-    st.write("Target capability for structured, privacy-safe customer interactions.")
-    st.caption("Planned — no implementation exists in this repository yet")
+    st.write(
+        "Create one structured, privacy-validated SSOT from a customer interaction."
+    )
+    st.caption("Sanitize → structure → validate privacy/replay → package")
 
 st.divider()
 with st.expander("Architecture boundary", expanded=False):

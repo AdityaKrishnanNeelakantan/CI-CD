@@ -1,4 +1,4 @@
-"""Unified Streamlit product shell for the three supported workflows."""
+"""Unified Streamlit product shell for the four supported workflows."""
 
 from __future__ import annotations
 
@@ -37,11 +37,16 @@ def run() -> None:
         title="Document Twin",
         icon=":material/description:",
     )
+    interaction = st.Page(
+        str(pages_dir / "interaction_twin.py"),
+        title="Interaction Twin",
+        icon=":material/record_voice_over:",
+    )
 
     page = st.navigation(
         {
             "Platform": [chat, home],
-            "Specialized workflows": [schema, database, pdf],
+            "Specialized workflows": [schema, database, pdf, interaction],
         },
         position="top",
     )

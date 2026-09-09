@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This repository uses a single canonical package, `synth_platform`, for all three implemented user-facing workflows. The architecture separates **what the product does** (workflows/use cases/domain) from **how it talks to external systems** (infrastructure) and **how users invoke it** (interfaces).
+This repository uses a single canonical package, `synth_platform`, for all four implemented user-facing workflows. The architecture separates **what the product does** (workflows/use cases/domain) from **how it talks to external systems** (infrastructure) and **how users invoke it** (interfaces).
 
-The default Streamlit entry point is a unified Chat page backed by a thin, deterministic capability coordinator. The coordinator routes to Schema, Database, or Document/PDF Twin; it does not reproduce their generation, training, validation, or packaging logic. Customer Interaction Twin is a planned target capability with no implementation in this repository.
+The default Streamlit entry point is a unified Chat page backed by a thin, deterministic capability coordinator. The coordinator routes to Schema, Database, Document/PDF, or Customer Interaction Twin; it does not reproduce their generation, extraction, training, validation, privacy, or packaging logic.
 
 The larger cross-domain target architecture also includes a separate live-agent plane, MCP tool gateway, shared governance/evaluation, and internal model platform. Those are transition targets rather than current runtime components. See `unified-chat-transition.md` for phase boundaries.
 
@@ -33,8 +33,9 @@ Reusable executable capabilities grouped by product stage:
 - `generation/`
 - `validation/`
 - `documents/`
+- `interactions/`
 
-The migrated Database/PDF lineage intentionally retains subpackages such as `engine/*/database` and `engine/documents/pdf`; this keeps behavioral ownership explicit without copying algorithms into each UI workflow.
+The migrated Database/PDF lineage intentionally retains subpackages such as `engine/*/database` and `engine/documents/pdf`; this keeps behavioral ownership explicit without copying algorithms into each UI workflow. Interaction parsing, sanitization, SSOT construction, and release validation are owned by `engine/interactions`.
 
 ### `domain/`
 Business concepts and policies: schema, constraints, privacy, relational structure, document models, profiling/generation/training/validation concepts, artifacts, and run metadata. Domain code is kept free from dataframe, database, UI, PDF-library, and queue dependencies.
@@ -94,9 +95,17 @@ There is intentionally no mandatory model-training stage because Schema Mode is 
 
 De-identification is an optional sibling operation after template construction; it is not a prerequisite for generating the twin.
 
+### Customer Interaction Twin
+
+`interfaces/streamlit/pages/interaction_twin.py`
+→ `application/workflows/interaction_twin.py`
+→ transcript parsing and sanitization → optional one-shot semantic enhancement → strict interaction SSOT → privacy/source-replay validation → checksummed ZIP packaging.
+
+Raw source text is kept in memory only. The model, when enabled, receives only sanitized text and may return closed-vocabulary semantic labels; malformed, invalid, or unavailable model output falls back deterministically. The released package contains only `sanitized_source.txt`, `interaction_ssot.json`, `validation_report.json`, and `manifest.json`.
+
 ## Run artifacts and lineage
 
-Database and PDF stages use `RunManifest`-based run directories and named stage outputs. This gives stage-level lineage instead of one opaque pipeline result. The workflow documentation lists the important artifact filenames and their producer/consumer relationships.
+Database, PDF, and Customer Interaction stages use `RunManifest`-based run directories and named stage outputs. This gives stage-level lineage instead of one opaque pipeline result. The workflow documentation lists the important artifact filenames and their producer/consumer relationships.
 
 ## Legacy isolation
 

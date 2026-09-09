@@ -41,7 +41,6 @@ CAPABILITIES: tuple[CapabilityDescriptor, ...] = (
         description="Create a structured, privacy-safe twin of an interaction.",
         command="/interaction",
         accepted_extensions=(".txt", ".log"),
-        status=CapabilityStatus.PLANNED,
     ),
 )
 

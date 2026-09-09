@@ -2,7 +2,7 @@
 
 ## Decision
 
-The product will expose synthetic-twin workflows as specialized capabilities behind one thin conversational coordinator. Schema, Database, and Document/PDF remain application workflows with deterministic, statistical, model-backed, validation, and packaging stages. They are not converted into generic LLM agents.
+The product exposes synthetic-twin workflows as specialized capabilities behind one thin conversational coordinator. Schema, Database, Document/PDF, and Customer Interaction remain application workflows with workflow-owned deterministic, statistical or optional model-backed, validation, and packaging stages. They are not converted into generic LLM agents.
 
 The coordinator owns only:
 
@@ -21,7 +21,7 @@ It does not generate rows, parse or render documents, train models, repair relat
 | Schema Twin | Mature Streamlit page and cohesive application workflow facade | Available |
 | Database Twin | Mature interactive Streamlit workflow and headless engine pipeline | Available through the existing interactive workflow |
 | Document Twin | Mature PDF extraction, binding, value generation, rendering, and validation workflow | Available as PDF Twin |
-| Customer Interaction Twin | No active workflow, DTO, engine, page, or test in this repository | Planned; never routed to a substitute workflow |
+| Customer Interaction Twin | TXT/LOG parser, sanitization, structured SSOT, privacy/source-replay validation, artifact manifest, and ZIP workflow | Available |
 
 The active repository does not currently contain NVIDIA NeMo Data Designer, MCP servers, a live-agent plane, a unified model registry, or a shared evaluation service. Those target components must not be represented as implemented.
 
@@ -38,8 +38,8 @@ The cross-domain target diagrams describe separate concerns:
 Three coordinators remain distinct:
 
 - **Chat coordinator:** selects a product capability.
-- **Workflow orchestration:** sequences Schema, Database, or Document stages.
-- **Generation/model orchestration:** performs generation inside a workflow.
+- **Workflow orchestration:** sequences Schema, Database, Document, or Customer Interaction stages.
+- **Generation/model orchestration:** performs generation or bounded semantic enhancement inside a workflow.
 
 The first transition adds only the chat coordinator.
 
@@ -50,9 +50,9 @@ The first transition adds only the chat coordinator.
 - Make a unified Chat page the default Streamlit entry point.
 - Add a pure application-level capability registry and deterministic router.
 - Support explicit capability selection and unambiguous attachment-type routing.
-- Hand control to the selected existing workflow without copying workflow logic.
-- Preserve direct Schema, Database, and PDF navigation during migration.
-- Show Customer Interaction as planned/unavailable with a truthful explanation.
+- Hand control to the selected specialized workflow without copying workflow logic.
+- Preserve direct Schema, Database, PDF, and Customer Interaction navigation.
+- Route Customer Interaction to its workflow for pasted text or `.txt`/`.log` input.
 - Keep chat state in Streamlit `session_state`; keep existing workflow state namespaces untouched.
 
 ### Routing policy
@@ -71,9 +71,9 @@ The first router intentionally does not use an LLM. Broad natural-language inten
 - Schema: `.sql`, `.json`, `.yaml`, `.yml`
 - Database: `.db`, `.sqlite`, `.sqlite3`
 - Document: `.pdf`
-- Customer Interaction: `.txt`, `.log` (planned/unavailable until its workflow exists)
+- Customer Interaction: `.txt`, `.log`
 
-The transitional shell uses attachments for routing only. Existing workflow pages continue to own ingestion and validation, so users hand the source to the selected workflow after routing.
+The transitional shell uses attachments for routing only. Specialized workflow pages own ingestion and validation, so the source is handled only after capability selection. Customer Interaction also accepts pasted transcript text directly on its page.
 
 ### Explicit non-goals
 
@@ -84,6 +84,30 @@ The transitional shell uses attachments for routing only. Existing workflow page
 - No replacement of existing validation, artifact, model, or orchestration code.
 - No automated execution of the Database headless pipeline from chat; that path auto-approves semantics and is not equivalent to the interactive review workflow.
 - No placeholder Interaction Twin that produces unvalidated artifacts.
+
+### Implemented Customer Interaction flow
+
+```text
+transcript text / .txt / .log
+        |
+        v
+parse + sanitize + participant pseudonymization
+        |
+        +--> optional one-shot model semantics (sanitized text only)
+        |     `--> deterministic fallback on timeout, malformed, or invalid output
+        v
+strict interaction SSOT
+        |
+        v
+privacy + source-replay validation
+        |
+        v
+release gate --> checksummed ZIP
+```
+
+Raw transcript text is never written to the run directory. Immutable facts, participant IDs, counts, and release checks are deterministic. Optional model output is restricted to closed-vocabulary topic, issue, action, resolution, and sentiment fields; it cannot author transcript text or summaries. A released ZIP contains exactly `sanitized_source.txt`, `interaction_ssot.json`, `validation_report.json`, and `manifest.json`.
+
+This implementation remains in the synthetic-data plane. It does not create a service agent, an MCP server, a database or queue dependency, or a Data Designer integration.
 
 ## Phase 2: Reusable Capability Presenters
 
@@ -123,7 +147,7 @@ interfaces/streamlit/capabilities.py
         +--> existing Schema page/workflow
         +--> existing Database page/workflow
         +--> existing PDF page/workflow
-        `--> explicit unavailable Interaction response
+        `--> existing Customer Interaction page/workflow
 ```
 
 The interface mapping is intentionally outside `application/`: the application router knows product capability IDs and availability, but it does not import Streamlit pages.
@@ -131,10 +155,10 @@ The interface mapping is intentionally outside `application/`: the application r
 ## Acceptance Criteria for Phase 1
 
 - Chat is the default Streamlit page.
-- Schema, Database, and Document can be selected explicitly from Chat.
-- `.sql`/schema, SQLite, and PDF attachments route deterministically.
+- Schema, Database, Document, and Customer Interaction can be selected explicitly from Chat.
+- `.sql`/schema, SQLite, PDF, and `.txt`/`.log` attachments route deterministically.
 - ambiguous or conflicting attachments produce clarification rather than a guess.
-- Interaction selection returns a planned/unavailable result and never invokes another workflow.
+- Interaction selection invokes only the specialized Customer Interaction workflow.
 - selecting an available capability offers a hand-off to the existing workflow implementation without copied stage logic.
 - existing specialized pages remain directly accessible.
 - existing architecture dependency contracts and relevant workflow checks continue to pass.

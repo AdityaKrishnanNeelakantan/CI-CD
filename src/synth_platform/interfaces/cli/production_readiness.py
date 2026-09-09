@@ -61,11 +61,6 @@ CHECK_STATUSES = ("pass", "warn", "fail", "unavailable", "planned", "not_checked
 
 PLANNED_CAPABILITIES = (
     (
-        "planned.interaction_twin",
-        "Customer Interaction Twin",
-        "No workflow implementation exists; requests fail closed rather than using a substitute.",
-    ),
-    (
         "planned.data_designer_integration",
         "NVIDIA Data Designer integration",
         "Dependencies may be installed, but no application adapter is implemented yet.",
@@ -618,6 +613,7 @@ def collect_report(
             _workflow_check("schema", "application/workflows/schema_twin.py"),
             _workflow_check("database", "application/workflows/database_twin.py"),
             _workflow_check("document", "application/workflows/pdf_twin.py"),
+            _workflow_check("interaction", "application/workflows/interaction_twin.py"),
             _path_check("storage.output_root", output_root),
             _path_check("storage.staging_root", staging_root),
             _signing_key_check(

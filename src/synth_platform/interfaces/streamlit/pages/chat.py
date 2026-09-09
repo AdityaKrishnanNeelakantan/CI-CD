@@ -21,9 +21,9 @@ from synth_platform.interfaces.streamlit.state import (
 )
 
 _WELCOME = (
-    "Describe what you want to create or attach a schema, SQLite database, or PDF. "
-    "I route the request; each specialized workflow still owns generation, validation, "
-    "and artifacts."
+    "Describe what you want to create or attach a schema, SQLite database, PDF, or "
+    "TXT/LOG interaction. I route the request; each specialized workflow still owns "
+    "generation, validation, and artifacts."
 )
 
 
@@ -125,7 +125,7 @@ def run() -> None:
         accept_multiple_files=True,
         help=(
             "Schema: SQL/JSON/YAML · Database: SQLite · Document: PDF · "
-            "Interaction: TXT/LOG (planned)"
+            "Interaction: TXT/LOG"
         ),
     )
     if uploaded_files and st.button(

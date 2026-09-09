@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 import os
+
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -352,6 +353,10 @@ def test_ollama_uncertainty_is_neutral_unless_explicitly_required(
     assert _check(strict, "capability.ollama.runtime").status == "not_checked"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX executable permission semantics are not applicable on Windows",
+)
 def test_non_executable_tesseract_override_does_not_pass(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -437,3 +442,5 @@ def test_real_ed25519_signing_pair_derivation() -> None:
 
     assert readiness._signing_pair_matches(private_seed, matching_public_key) is True
     assert readiness._signing_pair_matches(private_seed, mismatched_public_key) is False
+
+

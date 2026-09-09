@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 _IDENTIFIER_LABELS = r"account|member|customer|case|ticket|order|reference|ref"
+_BARE_IDENTIFIER_LABELS = r"account|case|ticket|order|reference|ref"
 _IDENTIFIER_VALUE = r"([A-Z0-9](?:[A-Z0-9._/-]{2,62}[A-Z0-9]))"
 _IDENTIFIER_WITH_DIGIT = (
     r"((?=[A-Z0-9._/-]{4,64}(?:\s|$))(?=[A-Z0-9._/-]*\d)"
@@ -22,13 +23,13 @@ INTERACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "account_id",
         re.compile(
-            rf"(?i)\b(?:{_IDENTIFIER_LABELS})\s*(?:=|:|#)\s*"
+            rf"(?i)\b(?:{_BARE_IDENTIFIER_LABELS})\s*(?:=|:|#)\s*"
             rf"{_IDENTIFIER_VALUE}"
         ),
     ),
     (
         "account_id",
-        re.compile(rf"(?i)\b(?:{_IDENTIFIER_LABELS})\s+{_IDENTIFIER_WITH_DIGIT}"),
+        re.compile(rf"(?i)\b(?:{_BARE_IDENTIFIER_LABELS})\s+{_IDENTIFIER_WITH_DIGIT}"),
     ),
     (
         "secret",

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
@@ -7,40 +7,25 @@ import App from "./App";
 const session = {
   id: "session-1",
   workflow: "schema_twin",
+  workflow_type: "schema_twin",
   state: {},
   created_at: "2026-09-11T00:00:00Z",
   updated_at: "2026-09-11T00:00:00Z"
 };
 
-const uploadData = {
-  session,
-  summary: {
-    name: "schema_twin_minimal",
-    table_count: 2,
-    column_count: 6,
-    relationship_count: 1,
-    tables: []
-  },
-  columns: [
-    {
-      table: "users",
-      column: "user_id",
-      type: "int",
-      role: "PK",
-      nullable: "no",
-      references: "-",
-      description: "-"
-    }
-  ],
-  llm_text_columns: []
-};
-
 const queuedJob = {
   id: "job-1",
+  job_id: "job-1",
+  session_id: "session-1",
+  workflow_type: "schema_twin",
   kind: "schema.generate",
   status: "queued",
+  stage: "queued",
+  percent: 0,
+  message: "queued",
   progress: ["queued"],
   error: null,
+  result_id: null,
   result: null,
   created_at: "2026-09-11T00:00:00Z",
   updated_at: "2026-09-11T00:00:00Z"
@@ -49,8 +34,63 @@ const queuedJob = {
 const succeededJob = {
   ...queuedJob,
   status: "succeeded",
-  progress: ["queued", "running", "packaging download"],
-  result: { session_id: "session-1" }
+  stage: "preparing_files",
+  percent: 100,
+  message: "Preparing files",
+  result_id: "result-1",
+  result: { result_id: "result-1" }
+};
+
+const resultBundle = {
+  id: "result-1",
+  result_id: "result-1",
+  session_id: "session-1",
+  workflow_type: "schema_twin",
+  status: "available",
+  preview: {
+    tables: {
+      users: [{ user_id: 1, status: "active" }]
+    }
+  },
+  quality_report: { status: "passed", passed: true },
+  summary: { table_count: 1, row_count: 5 },
+  artifacts: [
+    {
+      id: "artifact-1",
+      artifact_id: "artifact-1",
+      name: "users.csv",
+      filename: "users.csv",
+      path: "/tmp/users.csv",
+      media_type: "text/csv",
+      content_type: "text/csv",
+      size: 128,
+      size_bytes: 128,
+      role: "data",
+      kind: "data",
+      downloadable: true,
+      download_url: "/api/results/result-1/artifacts/artifact-1/download",
+      metadata: {}
+    },
+    {
+      id: "artifact-2",
+      artifact_id: "artifact-2",
+      name: "lineage.json",
+      filename: "lineage.json",
+      path: "/tmp/missing.json",
+      media_type: "application/json",
+      content_type: "application/json",
+      size: null,
+      size_bytes: null,
+      role: "report",
+      kind: "report",
+      downloadable: false,
+      download_url: null,
+      metadata: {}
+    }
+  ],
+  metadata: {},
+  created_at: "2026-09-11T00:00:00Z",
+  updated_at: "2026-09-11T00:00:00Z"
 };
 
 function jsonResponse(data: unknown, status = 200) {
@@ -62,7 +102,8 @@ function jsonResponse(data: unknown, status = 200) {
   );
 }
 
-function renderApp() {
+function renderApp(route = "/") {
+  window.history.pushState({}, "", route);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
   });
@@ -73,7 +114,7 @@ function renderApp() {
   );
 }
 
-function installFetchMock(options: { blockDownload?: boolean } = {}) {
+function installFetchMock() {
   const calls: string[] = [];
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -94,7 +135,20 @@ function installFetchMock(options: { blockDownload?: boolean } = {}) {
       return jsonResponse({ data: session }, 201);
     }
     if (url === "/api/schema/sessions/session-1/schema-file" && method === "POST") {
-      return jsonResponse({ data: uploadData });
+      return jsonResponse({
+        data: {
+          session,
+          summary: {
+            name: "schema_twin_minimal",
+            table_count: 1,
+            column_count: 2,
+            relationship_count: 0,
+            tables: []
+          },
+          columns: [{ table: "users", column: "user_id", type: "int", role: "PK", nullable: "no", references: "-", description: "-" }],
+          llm_text_columns: []
+        }
+      });
     }
     if (url === "/api/schema/sessions/session-1/generate" && method === "POST") {
       return jsonResponse({ data: { job: queuedJob } }, 202);
@@ -102,109 +156,167 @@ function installFetchMock(options: { blockDownload?: boolean } = {}) {
     if (url === "/api/jobs/job-1") {
       return jsonResponse({ data: succeededJob });
     }
-    if (url === "/api/schema/sessions/session-1/preview") {
-      return jsonResponse({
-        data: {
-          tables: { users: [{ user_id: 1, status: "active" }] },
-          row_counts: { users: 5 }
-        }
-      });
+    if (url === "/api/results/result-1") {
+      return jsonResponse({ data: resultBundle });
     }
-    if (url === "/api/schema/sessions/session-1/validation") {
+    if (url === "/api/results/result-1/artifacts/artifact-1/download") {
+      return Promise.resolve(new Response(new Blob(["user_id,status\n1,active"], { type: "text/csv" }), { status: 200 }));
+    }
+    if (url === "/api/results/result-1/save" && method === "POST") {
       return jsonResponse({
         data: {
-          report: { passed: true, export_ready: true },
-          highlights: {
-            hard_checks_passed: true,
-            status: "passed",
-            issues: [],
-            row_counts: { users: 5 },
-            tables: ["users"],
-            export_count: 1
+          project_id: "project-1",
+          run_id: "run-1",
+          saved: true,
+          project: {
+            id: "project-1",
+            name: "Schema Twin Result",
+            workflow_type: "schema",
+            created_at: "2026-09-11T00:00:00Z",
+            status: "completed"
           }
         }
+      }, 201);
+    }
+    if (url === "/api/projects") {
+      return jsonResponse({
+        data: {
+          projects: [
+            {
+              id: "project-1",
+              name: "Schema Twin Result",
+              workflow_type: "schema",
+              workflow_label: "Schema",
+              records: "5",
+              created_on: "Sep 11, 2026 12:00 AM",
+              status: "completed",
+              validation: "Passed",
+              transfer: "Not attempted",
+              latest_run_id: "run-1",
+              latest_result_id: "result-1"
+            }
+          ]
+        }
       });
     }
-    if (url === "/api/schema/sessions/session-1/download" && method === "POST") {
-      return jsonResponse({ data: { download_id: "download-1", url: "/api/downloads/download-1" } }, 201);
-    }
-    if (url === "/api/downloads/download-1") {
-      if (options.blockDownload) {
-        return jsonResponse(
-          { error: { code: "transfer_blocked", message: "transfer blocked: schema hard validation did not pass" } },
-          403
-        );
-      }
-      return Promise.resolve(new Response(new Blob(["zip-bytes"], { type: "application/zip" }), { status: 200 }));
+    if (url === "/api/settings" && method === "PUT") {
+      return jsonResponse({
+        data: {
+          generation_mode: "hybrid",
+          default_record_count: 25,
+          privacy_level: "strict",
+          default_output_format: "parquet"
+        }
+      });
     }
     return jsonResponse({ error: { code: "not_found", message: url } }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, calls };
+  return { calls };
 }
 
-async function uploadSchema(user: ReturnType<typeof userEvent.setup>) {
-  const file = new File(['{"tables":{}}'], "schema.json", { type: "application/json" });
-  await user.upload(screen.getByLabelText("Schema file"), file);
-}
-
-async function uploadAndGenerate(user: ReturnType<typeof userEvent.setup>) {
-  await uploadSchema(user);
-  await screen.findByText("schema_twin_minimal");
-  await user.click(screen.getByRole("button", { name: /generate/i }));
-  await screen.findByText("succeeded", {}, { timeout: 2000 });
-  await screen.findByText("active");
-}
-
-describe("Schema Twin React flow", () => {
+describe("Synthetic Data Twin routed app", () => {
   beforeEach(() => {
-    vi.stubGlobal("URL", {
-      ...URL,
-      createObjectURL: vi.fn(() => "blob:download"),
-      revokeObjectURL: vi.fn()
-    });
+    installFetchMock();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:download") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    window.history.pushState({}, "", "/");
   });
 
-  test("creates a session and uploads a schema file", async () => {
-    const { calls } = installFetchMock();
-    const user = userEvent.setup();
+  test("renders the shell navigation and home workflow cards", () => {
     renderApp();
 
-    await uploadSchema(user);
+    expect(screen.getByRole("heading", { name: "Synthetic Data Twin" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Home/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /My Projects/i })).toBeInTheDocument();
+    expect(screen.getByText("Air-Gapped Mode")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Schema Twin/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Database Twin/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Document Twin/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Customer Interaction Twin/i })).toBeInTheDocument();
+  });
 
+  test("polls and renders a shared progress job", async () => {
+    renderApp("/progress/job-1");
+
+    expect(await screen.findByText("succeeded")).toBeInTheDocument();
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /View Results/i })).toHaveAttribute("href", "/results/result-1");
+  });
+
+  test("renders downloadable and metadata-only result artifacts", async () => {
+    const user = userEvent.setup();
+    renderApp("/results/result-1");
+
+    expect(await screen.findByText("Generated Results")).toBeInTheDocument();
+    expect(screen.getByText("user_id")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "files" }));
+    expect(screen.getByText("users.csv")).toBeInTheDocument();
+    expect(screen.getByText("lineage.json")).toBeInTheDocument();
+    expect(screen.getByText("Metadata only")).toBeInTheDocument();
+    await user.click(screen.getByTitle("Download"));
+    expect(URL.createObjectURL).toHaveBeenCalled();
+  });
+
+  test("saves a result bundle to My Projects", async () => {
+    const user = userEvent.setup();
+    renderApp("/results/result-1");
+
+    await screen.findByText("Generated Results");
+    await user.click(screen.getByRole("button", { name: /Save to My Projects/i }));
+
+    expect(await screen.findByText(/Saved to My Projects/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /View projects/i })).toHaveAttribute("href", "/projects");
+  });
+
+  test("renders real project data with a view action", async () => {
+    renderApp("/projects");
+
+    expect(await screen.findByText("Schema Twin Result")).toBeInTheDocument();
+    expect(screen.getByText("Schema")).toBeInTheDocument();
+    expect(screen.getByText("Passed")).toBeInTheDocument();
+    expect(screen.getByTitle("View")).toHaveAttribute("href", "/results/result-1");
+  });
+
+  test("fetches and saves settings", async () => {
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const records = await screen.findByLabelText("Default records");
+    await user.clear(records);
+    await user.type(records, "25");
+    await user.selectOptions(screen.getByLabelText("Generation mode"), "hybrid");
+    await user.selectOptions(screen.getByLabelText("Privacy level"), "strict");
+    await user.selectOptions(screen.getByLabelText("Default output format"), "parquet");
+    await user.click(screen.getByRole("button", { name: /Save Settings/i }));
+
+    expect(await screen.findByText("Settings saved")).toBeInTheDocument();
+  });
+
+  test("blocks workflow generation until a required upload exists", () => {
+    renderApp("/database");
+
+    expect(screen.getByRole("button", { name: /generate/i })).toBeDisabled();
+    expect(screen.getByText(/SQLite upload is supported/i)).toBeInTheDocument();
+  });
+
+  test("starts schema generation and navigates to the progress route", async () => {
+    const user = userEvent.setup();
+    renderApp("/schema");
+
+    const file = new File(['{"tables":{}}'], "schema.json", { type: "application/json" });
+    await user.upload(await screen.findByLabelText("Schema file"), file);
     expect(await screen.findByText("schema_twin_minimal")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Columns" })).toBeInTheDocument();
-    expect(calls).toContain("POST /api/schema/sessions");
-    expect(calls).toContain("POST /api/schema/sessions/session-1/schema-file");
-  });
 
-  test("polls the generation job and renders results", async () => {
-    installFetchMock();
-    const user = userEvent.setup();
-    renderApp();
+    await user.click(screen.getByRole("button", { name: /generate/i }));
 
-    await uploadAndGenerate(user);
-
-    expect(screen.getByText("packaging download")).toBeInTheDocument();
-    expect(screen.getByText("passed")).toBeInTheDocument();
-    expect(screen.getAllByText("user_id").length).toBeGreaterThan(0);
-  });
-
-  test("shows the blocked download state from the transfer gate", async () => {
-    installFetchMock({ blockDownload: true });
-    const user = userEvent.setup();
-    renderApp();
-
-    await uploadAndGenerate(user);
-    const validationPanel = screen.getByRole("button", { name: /download zip/i }).closest(".panel") as HTMLElement;
-    await user.click(within(validationPanel).getByRole("button", { name: /download zip/i }));
-
-    expect(await screen.findByText("transfer blocked: schema hard validation did not pass")).toBeInTheDocument();
-    expect(within(validationPanel).getByRole("button", { name: /download zip/i })).toBeDisabled();
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/job-1"));
+    expect(await screen.findByText("View Results")).toBeInTheDocument();
   });
 });

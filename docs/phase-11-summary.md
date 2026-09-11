@@ -36,7 +36,7 @@ pip install -e '.[api,schema,parquet]'
 Run the FastAPI backend:
 
 ```bash
-uvicorn synth_platform.interfaces.api.app:app --reload --host 127.0.0.1 --port 8000
+synth-platform-api --reload --host 127.0.0.1 --port 8000
 ```
 
 Run the React frontend:

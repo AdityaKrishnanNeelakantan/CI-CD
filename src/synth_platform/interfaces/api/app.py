@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 import synth_platform
@@ -34,6 +33,11 @@ from synth_platform.infrastructure.persistence.project_views import (
     read_product_settings,
     write_product_settings,
 )
+from synth_platform.infrastructure.jobs.inline import LocalJobRunner
+from synth_platform.interfaces.api.contracts import GenerationJob, ResultBundle, WorkflowSession
+from synth_platform.interfaces.api.routes.database import router as database_router
+from synth_platform.interfaces.api.routes.document import router as document_router
+from synth_platform.interfaces.api.routes.interaction import router as interaction_router
 from synth_platform.interfaces.api.store import get_api_store
 
 JOB_STATUSES = {"queued", "running", "succeeded", "failed"}
@@ -71,6 +75,10 @@ class SettingsRequest(BaseModel):
     default_output_format: str | None = None
 
 
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = None
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Synth Platform API", version=getattr(synth_platform, "__version__", "0.0.0"))
     app.add_middleware(
@@ -86,6 +94,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     _register_error_handlers(app)
+    app.include_router(database_router)
+    app.include_router(document_router)
+    app.include_router(interaction_router)
     _register_routes(app)
     return app
 
@@ -155,6 +166,72 @@ def _register_routes(app: FastAPI) -> None:
     def get_job(job_id: str) -> dict[str, Any]:
         return _ok(_job_response(_get_job(job_id)))
 
+    @app.get("/api/results/{result_id}")
+    def get_result(result_id: str) -> dict[str, Any]:
+        return _ok(_result_response(_get_result_bundle(result_id)))
+
+    @app.get("/api/results/{result_id}/artifacts/{artifact_id}/download")
+    def download_result_artifact(result_id: str, artifact_id: str) -> FileResponse:
+        bundle = _get_result_bundle(result_id)
+        artifact = _find_artifact(bundle, artifact_id)
+        path = Path(str(artifact.get("path") or ""))
+        if not path.is_file():
+            _raise(410, "artifact_unavailable", f"Artifact {artifact_id!r} is no longer available.")
+        filename = str(artifact.get("filename") or artifact.get("name") or path.name)
+        content_type = str(artifact.get("content_type") or artifact.get("media_type") or "application/octet-stream")
+        return FileResponse(path, media_type=content_type, filename=filename)
+
+    @app.post("/api/results/{result_id}/save", status_code=201)
+    def save_result_to_project(result_id: str) -> dict[str, Any]:
+        store = get_api_store()
+        bundle = _get_result_bundle(result_id)
+        metadata = dict(bundle.get("metadata") or {})
+        db = get_platform_db()
+        saved_project_id = metadata.get("saved_project_id")
+        saved_run_id = metadata.get("saved_run_id")
+        if saved_project_id and saved_run_id:
+            try:
+                project = db.get_project(str(saved_project_id))
+                run = db.get_run(str(saved_run_id))
+                return _ok({"project_id": project.id, "run_id": run.id, "project": project.__dict__, "saved": False})
+            except KeyError:
+                pass
+
+        workflow_type = _project_workflow_type(str(bundle.get("workflow_type") or "schema_twin"))
+        existing_run = _saved_run_for_result(db, workflow_type, result_id)
+        if existing_run is not None:
+            project = db.get_project(existing_run.project_id)
+            metadata.update({"saved_project_id": project.id, "saved_run_id": existing_run.id})
+            bundle["metadata"] = metadata
+            store.save_result_bundle(bundle)
+            return _ok({"project_id": project.id, "run_id": existing_run.id, "project": project.__dict__, "saved": False})
+
+        name = _project_name_for_result(bundle)
+        quality_report = bundle.get("quality_report") if isinstance(bundle.get("quality_report"), dict) else {}
+        summary = bundle.get("summary") if isinstance(bundle.get("summary"), dict) else {}
+        validation_passed = _validation_passed(quality_report)
+        run = db.record_run(
+            workflow_type=workflow_type,
+            project_name=name,
+            status="completed" if str(bundle.get("status") or "available") == "available" else "in_progress",
+            validation_status=str(quality_report.get("status") or quality_report.get("overall") or "") or None,
+            validation_passed=validation_passed,
+            output_id=result_id,
+            metadata={
+                "result_id": result_id,
+                "session_id": bundle.get("session_id"),
+                "row_counts": summary.get("row_counts"),
+                "turn_count": summary.get("synthetic_turn_count"),
+                "artifact_count": len(bundle.get("artifacts") or []),
+            },
+            run_id=f"result-{result_id}",
+        )
+        project = db.get_project(run.project_id)
+        metadata.update({"saved_project_id": project.id, "saved_run_id": run.id})
+        bundle["metadata"] = metadata
+        store.save_result_bundle(bundle)
+        return _ok({"project_id": project.id, "run_id": run.id, "project": project.__dict__, "saved": True})
+
     @app.get("/api/downloads/{download_id}")
     def download(download_id: str) -> Response:
         record = _get_download(download_id)
@@ -223,11 +300,13 @@ def _register_routes(app: FastAPI) -> None:
         record = _get_schema_session(session_id)
         if not (record.get("state") or {}).get("schema"):
             _raise(409, "schema_required", "Upload a schema file before starting generation.")
-        job = get_api_store().create_job(
+        job = LocalJobRunner(get_api_store()).submit(
             kind="schema.generate",
+            session_id=session_id,
+            workflow_type="schema_twin",
             payload={"session_id": session_id, "request": body.model_dump(mode="json")},
+            handler=_run_schema_generation_job,
         )
-        threading.Thread(target=_run_schema_generation_job, args=(job["id"],), daemon=True).start()
         return _ok({"job": _job_response(job)})
 
     @app.get("/api/schema/sessions/{session_id}/preview")
@@ -286,10 +365,21 @@ def _register_routes(app: FastAPI) -> None:
             _raise(404, "not_found", f"Project {project_id!r} was not found.")
         return _ok({"runs": project_run_rows(get_platform_db(), project_id)})
 
+    @app.patch("/api/projects/{project_id}")
+    def update_project(project_id: str, body: ProjectUpdateRequest) -> dict[str, Any]:
+        updates = body.model_dump(exclude_none=True)
+        if not updates:
+            _raise(422, "validation_error", "At least one project field must be provided.")
+        try:
+            project = get_platform_db().update_project(project_id, **updates)
+        except KeyError:
+            _raise(404, "not_found", f"Project {project_id!r} was not found.")
+        return _ok(project.__dict__)
+
 
 def _run_schema_generation_job(job_id: str) -> None:
     store = get_api_store()
-    job = store.update_job(job_id, status="running", progress=["queued", "running"])
+    job = store.advance_job(job_id, status="running", stage="analyzing_input", percent=5, message="Analyzing input")
     session_id = str(job["payload"]["session_id"])
     request = dict(job["payload"].get("request") or {})
     try:
@@ -297,10 +387,10 @@ def _run_schema_generation_job(job_id: str) -> None:
         schema_payload = (session.get("state") or {}).get("schema")
         if not isinstance(schema_payload, dict):
             raise ValueError("session does not contain an uploaded schema")
-        store.append_progress(job_id, "loading schema")
+        store.advance_job(job_id, stage="learning_patterns", percent=20, message="Learning data patterns")
         schema = load_schema(schema_payload)
         output_dir = store.root / "schema_outputs" / session_id / job_id
-        store.append_progress(job_id, "running schema-driven pipeline")
+        store.advance_job(job_id, stage="generating", percent=45, message="Generating synthetic data")
         result = generate_from_schema(
             schema,
             row_count=request.get("row_count"),
@@ -314,28 +404,90 @@ def _run_schema_generation_job(job_id: str) -> None:
             history=PlatformDB(),
             product_settings=PlatformDB(),
         )
-        store.append_progress(job_id, "packaging download")
+        store.advance_job(job_id, stage="validating", percent=75, message="Validating data quality")
         zip_path = store.write_blob(f"{session_id}.zip", package_download(result))
-        result_payload = _schema_result_payload(result, zip_path)
+        store.advance_job(job_id, stage="preparing_files", percent=90, message="Preparing files")
+        bundle = store.create_result_bundle(
+            session_id=session_id,
+            workflow_type="schema_twin",
+            preview={
+                "tables": {
+                    name: frame.head(100).to_dict(orient="records") for name, frame in result.preview_tables.items()
+                },
+                "row_counts": dict(result.row_counts),
+            },
+            quality_report=result.validation_report,
+            summary={
+                "row_counts": dict(result.row_counts),
+                "tables": list(result.preview_tables.keys()),
+                "export_count": len(result.export_paths),
+            },
+            artifacts=[
+                {
+                    "id": f"{session_id}-download",
+                    "name": f"{session_id}.zip",
+                    "path": str(zip_path),
+                    "media_type": "application/zip",
+                    "size": zip_path.stat().st_size if zip_path.is_file() else None,
+                    "role": "download",
+                    "metadata": {"format": "zip"},
+                },
+                *[
+                    {
+                        "id": f"{session_id}-{name}",
+                        "name": Path(path).name,
+                        "path": str(path),
+                        "media_type": "text/csv" if Path(path).suffix.lower() == ".csv" else "application/octet-stream",
+                        "size": Path(path).stat().st_size if Path(path).is_file() else None,
+                        "role": "table_export",
+                        "metadata": {"table": name},
+                    }
+                    for name, path in result.export_paths.items()
+                ],
+            ],
+            metadata={"job_id": job_id},
+        )
+        result_payload = _schema_result_payload(result, zip_path, result_id=str(bundle["id"]))
         store.write_result(session_id, result_payload)
         state = dict(session.get("state") or {})
-        state.update({"stage": "validation", "result_job_id": job_id})
+        state.update({"stage": "validation", "result_job_id": job_id, "result_id": bundle["id"]})
         session["state"] = state
         store.save_session(session)
-        store.update_job(job_id, status="succeeded", result={"session_id": session_id}, error=None)
+        store.update_job(
+            job_id,
+            status="succeeded",
+            stage="complete",
+            percent=100.0,
+            message="Generation complete",
+            result={"session_id": session_id, "result_id": bundle["id"]},
+            result_id=bundle["id"],
+            error=None,
+        )
     except LlmPolicyError as exc:
         store.update_job(
             job_id,
             status="failed",
+            stage="failed",
+            percent=100.0,
+            message="Generation failed",
             error={"code": "llm_policy_error", "message": str(exc)},
             result=None,
         )
     except Exception as exc:
-        store.update_job(job_id, status="failed", error={"code": "generation_failed", "message": str(exc)}, result=None)
+        store.update_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            percent=100.0,
+            message="Generation failed",
+            error={"code": "generation_failed", "message": str(exc)},
+            result=None,
+        )
 
 
-def _schema_result_payload(result, zip_path: Path) -> dict[str, Any]:
+def _schema_result_payload(result, zip_path: Path, *, result_id: str | None = None) -> dict[str, Any]:
     return {
+        "result_id": result_id,
         "row_counts": dict(result.row_counts),
         "preview_tables": {
             name: frame.head(100).to_dict(orient="records") for name, frame in result.preview_tables.items()
@@ -357,29 +509,125 @@ def _normalize_workflow(workflow: str) -> str:
 
 
 def _session_response(record: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": record["id"],
-        "workflow": record["workflow"],
-        "created_at": record["created_at"],
-        "updated_at": record["updated_at"],
-        "state": record.get("state") or {},
-    }
+    return WorkflowSession(
+        id=record["id"],
+        workflow=record["workflow"],
+        workflow_type=record["workflow"],
+        created_at=record["created_at"],
+        updated_at=record["updated_at"],
+        state=record.get("state") or {},
+    ).model_dump(mode="json")
 
 
 def _job_response(record: dict[str, Any]) -> dict[str, Any]:
     status = str(record.get("status"))
     if status not in JOB_STATUSES:
         status = "failed"
-    return {
-        "id": record["id"],
-        "kind": record.get("kind"),
-        "status": status,
-        "progress": record.get("progress") or [],
-        "error": record.get("error"),
-        "result": record.get("result"),
-        "created_at": record.get("created_at"),
-        "updated_at": record.get("updated_at"),
+    progress = list(record.get("progress") or [])
+    message = str(record.get("message") or (progress[-1] if progress else status))
+    percent = float(record.get("percent") or (100.0 if status in {"succeeded", "failed"} else 0.0))
+    return GenerationJob(
+        id=record["id"],
+        job_id=record["id"],
+        session_id=record.get("session_id") or (record.get("payload") or {}).get("session_id"),
+        workflow_type=record.get("workflow_type"),
+        kind=record.get("kind"),
+        status=status,
+        stage=str(record.get("stage") or status),
+        percent=max(0.0, min(100.0, percent)),
+        message=message,
+        progress=progress,
+        error=record.get("error"),
+        result_id=record.get("result_id"),
+        result=record.get("result"),
+        created_at=record.get("created_at"),
+        updated_at=record.get("updated_at"),
+    ).model_dump(mode="json")
+
+
+def _result_response(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(record)
+    result_id = str(normalized.get("result_id") or normalized.get("id"))
+    artifacts = [_artifact_response(result_id, artifact) for artifact in normalized.get("artifacts") or []]
+    normalized["artifacts"] = artifacts
+    return ResultBundle.model_validate(normalized).model_dump(mode="json")
+
+
+def _artifact_response(result_id: str, artifact: dict[str, Any]) -> dict[str, Any]:
+    item = dict(artifact)
+    artifact_id = str(item.get("artifact_id") or item.get("id") or item.get("name"))
+    filename = str(item.get("filename") or item.get("name") or artifact_id)
+    content_type = str(item.get("content_type") or item.get("media_type") or "application/octet-stream")
+    size = item.get("size_bytes", item.get("size"))
+    path = Path(str(item.get("path") or ""))
+    downloadable = bool(item.get("downloadable", path.is_file()))
+    item.update(
+        {
+            "id": artifact_id,
+            "artifact_id": artifact_id,
+            "name": str(item.get("name") or filename),
+            "filename": filename,
+            "media_type": content_type,
+            "content_type": content_type,
+            "size": size,
+            "size_bytes": size,
+            "role": item.get("role") or item.get("kind"),
+            "kind": item.get("kind") or item.get("role"),
+            "downloadable": downloadable,
+            "download_url": f"/api/results/{result_id}/artifacts/{artifact_id}/download" if downloadable else None,
+            "metadata": item.get("metadata") or {},
+        }
+    )
+    return item
+
+
+def _find_artifact(bundle: dict[str, Any], artifact_id: str) -> dict[str, Any]:
+    for artifact in bundle.get("artifacts") or []:
+        normalized_id = str(artifact.get("artifact_id") or artifact.get("id") or artifact.get("name"))
+        if normalized_id == artifact_id:
+            return artifact
+    _raise(404, "not_found", f"Artifact {artifact_id!r} was not found for result {bundle.get('id')!r}.")
+
+
+def _project_workflow_type(workflow_type: str) -> str:
+    aliases = {
+        "schema_twin": "schema",
+        "database_twin": "database",
+        "pdf_twin": "pdf",
+        "interaction_twin": "interaction",
     }
+    return aliases.get(workflow_type, workflow_type)
+
+
+def _saved_run_for_result(db: PlatformDB, workflow_type: str, result_id: str):
+    for run in db.list_runs(workflow_type=workflow_type):
+        if run.output_id == result_id or run.metadata.get("result_id") == result_id:
+            return run
+    return None
+
+
+def _project_name_for_result(bundle: dict[str, Any]) -> str:
+    labels = {
+        "schema_twin": "Schema Twin",
+        "database_twin": "Database Twin",
+        "pdf_twin": "Document Twin",
+        "interaction_twin": "Customer Interaction Twin",
+    }
+    workflow_type = str(bundle.get("workflow_type") or "schema_twin")
+    summary = bundle.get("summary") if isinstance(bundle.get("summary"), dict) else {}
+    explicit = summary.get("name") or summary.get("doc_id")
+    return str(explicit or f"{labels.get(workflow_type, workflow_type)} Result")
+
+
+def _validation_passed(report: dict[str, Any]) -> bool | None:
+    if "passed" in report:
+        return bool(report["passed"])
+    if "hard_checks_passed" in report:
+        return bool(report["hard_checks_passed"])
+    status = str(report.get("status") or report.get("overall") or "").lower()
+    if status:
+        return status in {"pass", "passed", "success", "succeeded"}
+    return None
 
 
 def _get_session(session_id: str) -> dict[str, Any]:
@@ -401,6 +649,13 @@ def _get_job(job_id: str) -> dict[str, Any]:
         return get_api_store().get_job(job_id)
     except KeyError:
         _raise(404, "not_found", f"Job {job_id!r} was not found.")
+
+
+def _get_result_bundle(result_id: str) -> dict[str, Any]:
+    try:
+        return get_api_store().get_result_bundle(result_id)
+    except KeyError:
+        _raise(404, "not_found", f"Result {result_id!r} was not found.")
 
 
 def _get_download(download_id: str) -> dict[str, Any]:

@@ -80,6 +80,7 @@ ui = [
 
 [project.scripts]
 synth-platform = "synth_platform.interfaces.cli.app:main"
+synth-platform-api = "synth_platform.interfaces.api.launcher:main"
 synth-platform-ui = "synth_platform.interfaces.streamlit.launcher:main"
 
 [tool.setuptools.packages.find]

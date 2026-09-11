@@ -28,7 +28,11 @@ from synth_platform.engine.inference.schema.planning import GenerationPlanner
 from synth_platform.engine.generation.schema.realism import EntityCoherenceEngine, RealisticTextGenerator, apply_realism_rules
 from synth_platform.engine.validation.schema.reporting import ReservoirTableSampler, build_generation_report_bundle
 from synth_platform.engine.generation.text.evidence import TextGenerationEvidence, merge_evidence
-from synth_platform.engine.generation.text.generator import TextGenerationConfig, generate_text_column
+from synth_platform.engine.generation.text.generator import (
+    TextCompletionModel,
+    TextGenerationConfig,
+    generate_text_column,
+)
 from synth_platform.engine.inference.schema.schema import Column, Relationship, ScenarioEvent, SchemaConfig
 from synth_platform.engine.inference.schema.schema_columns import resolve_unique_int_bounds
 from synth_platform.engine.generation.schema.smart_values import (
@@ -84,6 +88,7 @@ class DataSimulator:
                  is_preview: bool = True,
                  llm_provider: str = "openai",
                  llm_model: Optional[str] = None,
+                 text_model: TextCompletionModel | None = None,
                  custom_generators: Optional[Dict[str, Dict[str, Any]]] = None):
         """
         Initialize the simulator.
@@ -112,6 +117,7 @@ class DataSimulator:
         self.is_preview = is_preview
         self.llm_provider = llm_provider
         self.llm_model = llm_model
+        self.text_model = text_model
         self._text_generation_evidence: List[TextGenerationEvidence] = []
         # custom_generators: {table_name: {col_name: callable(df, context) -> array}}
         self.custom_generators: Dict[str, Dict[str, Any]] = custom_generators or {}
@@ -193,6 +199,7 @@ class DataSimulator:
             size=size,
             table_data=table_data,
             config=config,
+            model=self.text_model,
         )
         self._text_generation_evidence.append(result.evidence)
         return np.array([np.nan if v is None else v for v in result.values], dtype=object)
@@ -296,8 +303,13 @@ class DataSimulator:
         """Lazy initialize SmartValueGenerator."""
         if self._smart_gen is None:
             try:
-                from synth_platform.engine.generation.schema.smart_values import SmartValueGenerator
-                self._smart_gen = SmartValueGenerator()
+                from synth_platform.engine.generation.schema.smart_values import (
+                    SmartValueGenerator,
+                )
+
+                # Hosted model clients in the legacy helper are not part of the
+                # guarded runtime. Active composition uses curated local pools.
+                self._smart_gen = SmartValueGenerator(provider="disabled")
             except Exception as exc:
                 warnings.warn(f"Smart value generation unavailable: {exc}")
                 self._smart_gen = None

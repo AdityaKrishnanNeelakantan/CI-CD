@@ -1,0 +1,9 @@
+FROM qwen2.5:3b-instruct
+
+PARAMETER temperature 0.1
+PARAMETER top_p 0.8
+PARAMETER num_ctx 8192
+PARAMETER num_predict 1024
+PARAMETER repeat_penalty 1.1
+
+SYSTEM You convert customer support transcripts into structured synthetic twin SSOT JSON. Return only valid JSON. No markdown. No explanations. No speaker metadata inside text.

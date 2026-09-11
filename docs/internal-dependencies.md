@@ -1,5 +1,24 @@
 # Internal Dependencies and Data Flow
 
+## Unified chat routing
+
+```text
+interfaces/streamlit/pages/chat.py
+      │
+      ▼
+application/coordinator (pure capability selection)
+      │
+      ▼
+interfaces/streamlit/capabilities.py (page hand-off only)
+      │
+      ├─► existing Schema workflow
+      ├─► existing Database workflow
+      ├─► existing PDF/Document workflow
+      └─► existing Customer Interaction workflow
+```
+
+The coordinator does not import Streamlit, engine services, infrastructure, or workflow pages. Workflow orchestration starts only after capability selection; MCP and the live-agent plane are not active dependencies.
+
 ## Canonical workflow entry points
 
 | Workflow | UI | Application facade |
@@ -7,6 +26,7 @@
 | Schema | `interfaces/streamlit/pages/schema_twin.py` | `application/workflows/schema_twin.py` |
 | Database | `interfaces/streamlit/pages/database_twin.py` | `application/workflows/database_twin.py` |
 | PDF | `interfaces/streamlit/pages/pdf_twin.py` | `application/workflows/pdf_twin.py` |
+| Customer Interaction | `interfaces/streamlit/pages/interaction_twin.py` | `application/workflows/interaction_twin.py` |
 
 The UI should import these application facades instead of reaching into multiple low-level service packages.
 
@@ -103,6 +123,33 @@ SchemaModeResult (preview, row counts, validation, exports)
 
 Schema Mode intentionally has no source-data training dependency.
 
+## Customer Interaction dependency chain
+
+```text
+pasted transcript / .txt / .log
+      │ raw source remains in memory only
+      ▼
+parse_and_sanitize_transcript
+      ├─ typed sensitive-value replacement
+      └─ participant pseudonymization
+      │
+      ├─────────────► optional one-shot ChatModel enhancement
+      │               (sanitized source only; closed enum output)
+      ▼
+build_interaction_ssot
+      │ deterministic fallback on model failure or invalid output
+      ▼
+validate_interaction_ssot
+      ├─ strict schema and count integrity
+      ├─ residual PII / secret checks
+      └─ source replay / overlap checks
+      │
+      ▼
+release gate → checksummed four-file ZIP package
+```
+
+The package contains only `sanitized_source.txt`, `interaction_ssot.json`, `validation_report.json`, and `manifest.json`. The workflow reuses the existing PDF PII/entity detectors, `ChatModel` port, `RunManifest`/`StageResult` lineage, and domain release gate without moving those responsibilities into the coordinator.
+
 ## Shared code versus workflow-specific code
 
 - **Shared platform concepts:** `domain/`, `application/ports`, generic `infrastructure/`.
@@ -110,6 +157,7 @@ Schema Mode intentionally has no source-data training dependency.
 - **Database lineage implementations:** stage subpackages ending in `/database`.
 - **Schema lineage implementations:** stage subpackages ending in `/schema` plus `generation/text`.
 - **PDF lineage implementation:** `engine/documents/pdf`.
+- **Interaction lineage implementation:** `engine/interactions` plus `domain/interactions`.
 - **Workflow sequencing only:** `application/workflows/`.
 - **Presentation only:** `interfaces/streamlit/`.
 

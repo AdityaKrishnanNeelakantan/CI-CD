@@ -1,7 +1,8 @@
 """Streamlit session state contains identifiers and paths, never credentials."""
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass
@@ -24,3 +25,44 @@ def load_state(session_state) -> DemoState:
 
 def save_state(session_state, state: DemoState) -> None:
     session_state["demo_state"] = asdict(state)
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """A renderable conversation entry stored without workflow payloads."""
+
+    role: str
+    content: str
+
+
+@dataclass
+class ChatState:
+    """Coordinator state kept separate from specialized workflow state."""
+
+    messages: list[ChatMessage] = field(default_factory=list)
+    selected_capability: str | None = None
+
+
+def load_chat_state(session_state) -> ChatState:
+    raw = session_state.get("chat_state") or {}
+    messages = [
+        ChatMessage(role=item["role"], content=item["content"])
+        for item in raw.get("messages", [])
+        if (
+            isinstance(item, dict)
+            and item.get("role") in {"user", "assistant"}
+            and isinstance(item.get("content"), str)
+        )
+    ]
+    selected = raw.get("selected_capability")
+    return ChatState(
+        messages=messages,
+        selected_capability=selected if isinstance(selected, str) else None,
+    )
+
+
+def save_chat_state(session_state, state: ChatState) -> None:
+    session_state["chat_state"] = {
+        "messages": [asdict(message) for message in state.messages],
+        "selected_capability": state.selected_capability,
+    }

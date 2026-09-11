@@ -29,6 +29,7 @@ from synth_platform.engine.validation.schema.export_validation import validate_e
 from synth_platform.engine.validation.schema.reporting import ReservoirTableSampler, build_validation_report
 from synth_platform.engine.inference.schema.schema import SchemaConfig
 from synth_platform.engine.generation.schema.simulator import DataSimulator
+from synth_platform.engine.generation.text.generator import TextCompletionModel
 from synth_platform.engine.validation.schema.validation import validate_data
 
 
@@ -78,6 +79,7 @@ def run_schema_pipeline(
     config: PipelineConfig,
     *,
     progress: Optional[PipelineProgress] = None,
+    text_model: TextCompletionModel | None = None,
 ) -> PipelineResult:
     """Generate schema-driven data with stage timings and optional chunked export."""
     progress = progress or PipelineProgress()
@@ -110,6 +112,7 @@ def run_schema_pipeline(
                 llm_text_enabled=config.llm_text_enabled and (config.preview_only or config.llm_full_enabled),
                 is_preview=config.preview_only,
                 max_llm_rows=config.max_llm_rows,
+                text_model=text_model,
             )
 
         progress.stage = "generation"

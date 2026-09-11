@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "synth-platform"
 version = "3.0.2"
-description = "Unified synthetic-data intelligence platform for schema, database, and document twin workflows"
+description = "Unified synthetic-data intelligence platform for schema, database, document, and interaction twin workflows"
 requires-python = ">=3.11"
 readme = "README.md"
 authors = [
@@ -49,6 +49,14 @@ llm = [
   "groq>=0.4.0",
   "openai>=1.0.0"
 ]
+nvidia = [
+  "data-designer>=0.9.1; python_version < '3.14'",
+  "nvidia-nat; python_version < '3.14'",
+  "nemo-retriever[nemotron-parse]; python_version == '3.12'",
+  "nemoguardrails; python_version < '3.14'",
+  "nemo-curator; python_version < '3.14'",
+  "nemo-curator[text_cpu]; python_version < '3.14' and platform_system != 'Windows'"
+]
 ocr = [
   "pdf2image>=1.17",
   "Pillow>=10",
@@ -62,7 +70,9 @@ pdf = [
   "langdetect>=1.0.9"
 ]
 schema = [
+  "data-designer>=0.9.1",
   "duckdb>=0.9",
+  "python-json-logger>=3.0.0,<4",
   "scipy>=1.10",
   "simpleeval>=1.0.7"
 ]
@@ -76,6 +86,7 @@ ui = [
 [project.scripts]
 synth-platform = "synth_platform.interfaces.cli.app:main"
 synth-platform-ui = "synth_platform.interfaces.streamlit.launcher:main"
+synth-platform-readiness = "synth_platform.interfaces.cli.production_readiness:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -85,6 +96,7 @@ synth_platform = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
 markers = [
   "contract: cross-module API and architecture contracts",
   "e2e: end-to-end workflow and UI tests",

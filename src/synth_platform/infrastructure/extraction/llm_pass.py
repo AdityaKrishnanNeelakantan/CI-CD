@@ -23,7 +23,9 @@ import pandas as pd
 from synth_platform.application.dto.dataset import RelationalDataset
 from synth_platform.application.ports.chat_model import ChatModel
 from synth_platform.domain.extraction.lowering import lower_target_schema
-from synth_platform.domain.extraction.target_schema import TargetEntity, TargetSchema
+from synth_platform.domain.extraction.target_schema import TargetSchema
+from synth_platform.domain.guardrails.models import GuardrailPolicy
+from synth_platform.engine.security.text_guardrails import DeterministicModelGuardrails
 from synth_platform.errors import ExtractionError
 
 _SYSTEM = (
@@ -48,9 +50,31 @@ def _coerce(value):
     return json.dumps(value)  # nested structures -> string, never dropped silently
 
 
-def _validate_rows(schema: TargetSchema, raw: dict) -> dict[str, list[dict]]:
-    """Keep only known entities/fields; coerce values. Unknown keys are dropped
-    (the schema is authoritative, not the model)."""
+def _normalise_evidence(value: object) -> str:
+    return " ".join(str(value).casefold().split())
+
+
+def _coerce_grounded(value: object, source_evidence: str):
+    coerced = _coerce(value)
+    if coerced is None:
+        return None
+    normalized = _normalise_evidence(coerced)
+    if not normalized or normalized not in source_evidence:
+        return None
+    return coerced
+
+
+def _validate_rows(
+    schema: TargetSchema,
+    raw: dict,
+    document_text: str,
+) -> dict[str, list[dict]]:
+    """Keep only known, source-grounded entity fields.
+
+    Unknown keys and scalar values without normalized source evidence are
+    discarded before deterministic lowering.
+    """
+    source_evidence = _normalise_evidence(document_text)
     out: dict[str, list[dict]] = {}
     for ent in schema.entities:
         field_names = {f.name for f in ent.fields}
@@ -60,9 +84,19 @@ def _validate_rows(schema: TargetSchema, raw: dict) -> dict[str, list[dict]]:
             for r in rows_in:
                 if not isinstance(r, dict):
                     continue
-                rows_out.append({fn: _coerce(r.get(fn)) for fn in field_names})
+                rows_out.append(
+                    {
+                        fn: _coerce_grounded(r.get(fn), source_evidence)
+                        for fn in field_names
+                    }
+                )
         elif isinstance(rows_in, dict):  # singleton returned as an object
-            rows_out.append({fn: _coerce(rows_in.get(fn)) for fn in field_names})
+            rows_out.append(
+                {
+                    fn: _coerce_grounded(rows_in.get(fn), source_evidence)
+                    for fn in field_names
+                }
+            )
         out[ent.name] = rows_out
     return out
 
@@ -76,17 +110,46 @@ class LlmExtractionPass:
         self.document_text = document_text
         self.target = target
         self.max_chars = max_chars
+        self.guardrails = DeterministicModelGuardrails()
+        self.guardrail_policy = GuardrailPolicy(
+            name="schema_guided_extraction",
+            max_input_characters=max_chars + 8_000,
+            max_output_characters=max_chars,
+            required_input_markers=("Entities and fields to extract:", "Document:"),
+            allowed_json_keys=tuple(entity.name for entity in target.entities),
+        )
+        self.last_input_report = None
+        self.last_output_report = None
 
     def _extract_rows(self) -> dict[str, list[dict]]:
-        completion = self.model.complete(_SYSTEM,
-                                         _prompt(self.target, self.document_text, self.max_chars))
+        prompt = _prompt(self.target, self.document_text, self.max_chars)
+        guarded_prompt = self.guardrails.inspect_input(
+            _SYSTEM,
+            prompt,
+            self.guardrail_policy,
+        )
+        self.last_input_report = guarded_prompt.report
+        if guarded_prompt.report.blocked:
+            raise ExtractionError("Document model input was blocked by guardrails.")
+        completion = self.model.complete(
+            guarded_prompt.system,
+            guarded_prompt.user,
+        )
+        guarded_output = self.guardrails.inspect_output(
+            completion,
+            self.guardrail_policy,
+            json_only=True,
+        )
+        self.last_output_report = guarded_output.report
+        if guarded_output.report.blocked:
+            raise ExtractionError("Document model output was blocked by guardrails.")
         try:
-            raw = json.loads(completion)
+            raw = json.loads(guarded_output.text)
         except (json.JSONDecodeError, TypeError) as e:
             raise ExtractionError(f"LLM returned non-JSON output: {e}") from e
         if not isinstance(raw, dict):
             raise ExtractionError("LLM output was not a JSON object of entities")
-        return _validate_rows(self.target, raw)
+        return _validate_rows(self.target, raw, self.document_text)
 
     def _build_frames(self, rows: dict[str, list[dict]]) -> dict[str, pd.DataFrame]:
         pk_values: dict[str, list[int]] = {}

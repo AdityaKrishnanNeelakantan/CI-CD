@@ -29,6 +29,8 @@ from typing import Any
 
 from faker import Faker
 
+from synth_platform.engine.generation.text.generator import TextCompletionModel
+
 _FAKER_METHOD_BY_STRATEGY = {
     "fake_person_name": "name",
     "fake_email": "email",
@@ -256,6 +258,7 @@ def _generate_field_value(
     identity: _DocumentIdentity | None = None,
     label: str | None = None,
     llm_text_enabled: bool = False,
+    text_model: TextCompletionModel | None = None,
 ) -> dict[str, Any]:
     # Document-scoped identity for roles that must stay consistent.
     if identity is not None:
@@ -284,6 +287,7 @@ def _generate_field_value(
                 label=label or "transaction_description",
                 text_role="transaction_note",
                 seed=rng.randint(0, 2**31 - 1),
+                text_model=text_model,
             )
             if llm_value:
                 return {"value": llm_value}
@@ -294,6 +298,7 @@ def _generate_field_value(
                 label=label or "medical_reason",
                 text_role="narrative",
                 seed=rng.randint(0, 2**31 - 1),
+                text_model=text_model,
             )
             if llm_value:
                 return {"value": llm_value}
@@ -310,6 +315,7 @@ def _generate_field_value(
                 label=label or "notes",
                 text_role="narrative",
                 seed=rng.randint(0, 2**31 - 1),
+                text_model=text_model,
             )
             if llm_value:
                 return {"value": _fit_text_to_shape(llm_value, shape_pattern)}
@@ -320,6 +326,7 @@ def _generate_field_value(
                 label=label or "text",
                 text_role="narrative",
                 seed=rng.randint(0, 2**31 - 1),
+                text_model=text_model,
             )
             if llm_value:
                 return {"value": _fit_text_to_shape(llm_value, shape_pattern)}
@@ -347,11 +354,20 @@ def _generate_field_value(
     }
 
 
-def _llm_narrative_value(*, label: str, text_role: str, seed: int) -> str | None:
+def _llm_narrative_value(
+    *,
+    label: str,
+    text_role: str,
+    seed: int,
+    text_model: TextCompletionModel | None = None,
+) -> str | None:
     """Best-effort single narrative via shared text engine; None on failure."""
     try:
+        from synth_platform.engine.generation.text import (
+            TextGenerationConfig,
+            generate_text_column,
+        )
         from synth_platform.engine.inference.schema.schema import Column
-        from synth_platform.engine.generation.text import TextGenerationConfig, generate_text_column
 
         column = Column(
             name=label.replace(" ", "_").lower() or "notes",
@@ -374,6 +390,7 @@ def _llm_narrative_value(*, label: str, text_role: str, seed: int) -> str | None
                 max_llm_rows=1,
                 seed=seed,
             ),
+            model=text_model,
         )
         value = result.values[0] if result.values else None
         if value is None:
@@ -390,6 +407,7 @@ def generate_document_values(
     seed: int | None = None,
     *,
     llm_text_enabled: bool = False,
+    text_model: TextCompletionModel | None = None,
 ) -> dict[str, Any]:
     rng = random.Random(seed)
     faker = Faker()
@@ -423,6 +441,7 @@ def generate_document_values(
                     identity=identity,
                     label=binding.get("label"),
                     llm_text_enabled=llm_text_enabled,
+                    text_model=text_model,
                 ),
             }
 
@@ -444,6 +463,7 @@ def generate_document_values(
                             identity=identity,
                             label=None,
                             llm_text_enabled=llm_text_enabled,
+                            text_model=text_model,
                         ),
                     }
                 )
@@ -479,6 +499,7 @@ def generate_document_values(
                                 identity=identity,
                                 label=column.get("label"),
                                 llm_text_enabled=llm_text_enabled,
+                            text_model=text_model,
                             ),
                         }
                     )

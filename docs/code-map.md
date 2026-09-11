@@ -2,16 +2,75 @@
 
 This is the active `src/synth_platform` Python inventory after consolidation. Files under `archive/legacy/` are intentionally excluded.
 
+## Application coordinator
+
+**3 Python files**
+
+```text
+application/coordinator/__init__.py
+application/coordinator/contracts.py
+application/coordinator/router.py
+```
+
+The coordinator selects a registered capability only. Streamlit page hand-off remains under `interfaces/streamlit/capabilities.py`, and `interfaces/streamlit/pages/chat.py` is the chat-first entry page.
+
 ## Application workflows
 
-**4 Python files**
+**5 Python files**
 
 ```text
 application/workflows/__init__.py
 application/workflows/database_twin.py
+application/workflows/interaction_twin.py
 application/workflows/pdf_twin.py
 application/workflows/schema_twin.py
 ```
+
+## Shared application workspace
+
+```text
+application/dto/workspace.py
+application/ports/workspace_repositories.py
+application/services/__init__.py
+application/services/result_presentation.py
+application/services/workspace.py
+infrastructure/persistence/local_workspace.py
+infrastructure/storage/source_staging.py
+interfaces/streamlit/workspace.py
+interfaces/streamlit/pages/projects.py
+interfaces/streamlit/pages/results.py
+interfaces/streamlit/pages/templates.py
+interfaces/streamlit/pages/settings_page.py
+interfaces/streamlit/pages/help.py
+```
+
+These files implement the shared session/progress/result/project/template/settings layer. The application service does not call workflow engines; specialized pages execute their existing facades and then publish safe presentation metadata. Local JSON writes are atomic, artifact paths must resolve below approved roots, and raw transcript/source credentials are excluded from workspace contracts.
+
+## Guardrail boundaries
+
+```text
+domain/guardrails/__init__.py
+domain/guardrails/models.py
+application/dto/tool_commands.py
+application/ports/guardrails.py
+application/services/tool_gateway.py
+engine/security/__init__.py
+engine/security/text_guardrails.py
+infrastructure/llm/guarded_chat.py
+infrastructure/llm/ollama_chat.py
+```
+
+Input/output guardrails provide source-free category/count reports, sensitive
+value masking, prompt-injection/scope/content checks, bounded JSON output checks,
+and workflow-specific grounding. `GuardedChatModel` decorates the existing
+model port; Ollama is restricted to loopback origins. Active text generation
+requires explicit guarded-model injection; active Schema smart-value composition
+disables the legacy helper's hosted providers and uses curated local fallback.
+
+Tool commands forbid unknown fields and constrain IDs/text. The guarded
+workspace facade checks local read/write/update/delete permission before calling
+`WorkspaceService`; artifact/session ownership is verified and delete is denied
+by default. This is not an MCP implementation and does not enter the coordinator.
 
 ## Application use cases
 
@@ -64,7 +123,7 @@ application/orchestration/workflow.py
 
 ## Domain
 
-**63 Python files**
+**65 Python files**
 
 ```text
 domain/__init__.py
@@ -90,6 +149,8 @@ domain/generation/__init__.py
 domain/generation/conditional.py
 domain/generation/models.py
 domain/inference/__init__.py
+domain/interactions/__init__.py
+domain/interactions/models.py
 domain/planning/__init__.py
 domain/planning/compiler.py
 domain/planning/models.py
@@ -393,6 +454,18 @@ engine/documents/pdf/validation_service.py
 engine/documents/pdf/value_generator.py
 ```
 
+## Interaction engine
+
+**3 Python files**
+
+```text
+engine/interactions/__init__.py
+engine/interactions/patterns.py
+engine/interactions/service.py
+```
+
+This engine owns deterministic transcript parsing, typed sanitization, participant pseudonymization, semantic fallback, strict SSOT construction, and privacy/source-replay validation. Optional model invocation and artifact packaging remain in the application workflow facade.
+
 ## Shared engine support
 
 **21 Python files**
@@ -489,7 +562,7 @@ infrastructure/storage/s3.py
 
 ## Interfaces
 
-**34 Python files**
+**39 Python files**
 
 ```text
 interfaces/__init__.py
@@ -509,20 +582,25 @@ interfaces/cli/commands/__init__.py
 interfaces/cli/commands/generate.py
 interfaces/cli/commands/train.py
 interfaces/cli/commands/validate.py
+interfaces/cli/production_readiness.py
 interfaces/sdk/__init__.py
 interfaces/sdk/client.py
 interfaces/sdk/models.py
 interfaces/streamlit/__init__.py
 interfaces/streamlit/app.py
+interfaces/streamlit/capabilities.py
 interfaces/streamlit/components/common/__init__.py
 interfaces/streamlit/components/common/intent_presets.py
 interfaces/streamlit/components/common/ux.py
 interfaces/streamlit/components/database/__init__.py
 interfaces/streamlit/components/pdf/__init__.py
 interfaces/streamlit/components/schema/__init__.py
+interfaces/streamlit/launcher.py
 interfaces/streamlit/pages/__init__.py
+interfaces/streamlit/pages/chat.py
 interfaces/streamlit/pages/database_twin.py
 interfaces/streamlit/pages/home.py
+interfaces/streamlit/pages/interaction_twin.py
 interfaces/streamlit/pages/pdf_twin.py
 interfaces/streamlit/pages/schema_twin.py
 interfaces/streamlit/state.py

@@ -1,0 +1,14 @@
+define flow self check input
+  $allowed = execute self_check_input
+  if not $allowed
+    bot refuse to respond
+    stop
+
+define flow self check output
+  $allowed = execute self_check_output
+  if not $allowed
+    bot refuse to respond
+    stop
+
+define bot refuse to respond
+  "I cannot provide that response because it may violate the configured privacy or safety policy."

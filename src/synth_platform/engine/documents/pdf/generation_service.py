@@ -20,8 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from synth_platform.engine.common.database.core.run_manifest import RunManifest
-from synth_platform.engine.common.database.core.stage_result import STATUS_SUCCESS, StageResult
+from synth_platform.engine.common.database.core.stage_result import (
+    STATUS_SUCCESS,
+    StageResult,
+)
 from synth_platform.engine.documents.pdf.value_generator import generate_document_values
+from synth_platform.engine.generation.text.generator import TextCompletionModel
 
 STAGE_NAME = "value_generation"
 DOCUMENT_SYNTHETIC_VALUES_FILENAME = "document_synthetic_values.json"
@@ -42,6 +46,7 @@ def run_value_generation(
     seed: int | None = None,
     *,
     llm_text_enabled: bool = False,
+    text_model: TextCompletionModel | None = None,
 ) -> StageResult:
     output_path = manifest.output_path(f"documents/{doc_id}/{DOCUMENT_SYNTHETIC_VALUES_FILENAME}")
     if output_path.exists():
@@ -51,7 +56,11 @@ def run_value_generation(
         )
 
     generated = generate_document_values(
-        template, binding_map, seed=seed, llm_text_enabled=bool(llm_text_enabled)
+        template,
+        binding_map,
+        seed=seed,
+        llm_text_enabled=bool(llm_text_enabled),
+        text_model=text_model,
     )
 
     document_synthetic_values = {

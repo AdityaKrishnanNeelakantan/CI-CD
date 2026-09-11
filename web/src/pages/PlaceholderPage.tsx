@@ -28,7 +28,6 @@ export function PlaceholderPage({ title }: { title: string }) {
     <section className="panel wide resource-page">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">{title}</p>
           <h2>{title}</h2>
         </div>
       </div>

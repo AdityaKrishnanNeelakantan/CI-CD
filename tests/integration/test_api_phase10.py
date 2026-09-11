@@ -92,7 +92,7 @@ def test_health_workflow_sessions_jobs_settings_and_projects(api_client: TestCli
 
     runs = api_client.get(f"/api/projects/{project.id}/runs")
     assert runs.status_code == 200
-    assert runs.json()["data"]["runs"][0]["result_id"] == "api-project-output"
+    assert runs.json()["data"]["runs"][0]["result_id"] is None
 
     empty_update = api_client.patch(f"/api/projects/{project.id}", json={})
     assert empty_update.status_code == 422
@@ -142,7 +142,9 @@ def test_schema_twin_generate_then_download_flow(api_client: TestClient) -> None
     assert result_data["result_id"] == job["result_id"]
     assert result_data["session_id"] == session_id
     assert result_data["workflow_type"] == "schema_twin"
-    assert result_data["preview"]["row_counts"] == {"users": 5, "orders": 5}
+    assert result_data["preview"]["row_counts"]["users"] == 5
+    assert result_data["preview"]["row_counts"]["orders"] > 5
+    assert result_data["summary"]["row_count_mode"] == "fk_aware"
     assert result_data["quality_report"]["passed"] is True
     assert {artifact["role"] for artifact in result_data["artifacts"]} >= {"download", "table_export"}
     downloadable = [artifact for artifact in result_data["artifacts"] if artifact["downloadable"]]
@@ -152,6 +154,10 @@ def test_schema_twin_generate_then_download_flow(api_client: TestClient) -> None
     artifact_download = api_client.get(downloadable[0]["download_url"])
     assert artifact_download.status_code == 200
     assert artifact_download.content
+
+    projects_before_save = api_client.get("/api/projects")
+    assert projects_before_save.status_code == 200
+    assert projects_before_save.json()["data"]["projects"] == []
 
     saved = api_client.post(f"/api/results/{job['result_id']}/save")
     assert saved.status_code == 201
@@ -170,7 +176,7 @@ def test_schema_twin_generate_then_download_flow(api_client: TestClient) -> None
     preview = api_client.get(f"/api/schema/sessions/{session_id}/preview")
     assert preview.status_code == 200
     assert set(preview.json()["data"]["tables"]) == {"users", "orders"}
-    assert preview.json()["data"]["row_counts"] == {"users": 5, "orders": 5}
+    assert preview.json()["data"]["row_counts"] == result_data["preview"]["row_counts"]
 
     validation = api_client.get(f"/api/schema/sessions/{session_id}/validation")
     assert validation.status_code == 200
@@ -225,6 +231,17 @@ def test_schema_upload_rejects_invalid_payload(api_client: TestClient) -> None:
     )
     assert upload.status_code == 400
     assert upload.json()["error"]["code"] == "schema_parse_error"
+
+
+def test_schema_upload_rejects_sqlite_database_files(api_client: TestClient) -> None:
+    created = api_client.post("/api/schema/sessions", json={"intent": "wrong workflow"})
+    session_id = created.json()["data"]["id"]
+    upload = api_client.post(
+        f"/api/schema/sessions/{session_id}/schema-file",
+        files={"file": ("source.sqlite", b"sqlite bytes", "application/x-sqlite3")},
+    )
+    assert upload.status_code == 400
+    assert upload.json()["error"]["code"] == "wrong_workflow"
 
 
 def test_download_endpoint_blocks_and_records_failed_validation(

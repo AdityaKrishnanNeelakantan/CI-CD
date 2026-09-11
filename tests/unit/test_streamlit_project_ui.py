@@ -45,10 +45,11 @@ def test_project_summaries_join_projects_to_latest_run_and_real_record_counts(tm
 
     assert summary.name == "Orders Twin"
     assert summary.workflow_label == "Schema"
-    assert summary.records == "6"
+    assert summary.records == "6 total"
     assert summary.validation == "Passed"
     assert summary.transfer == "Allowed"
     assert summary.latest_run_id == latest.id
+    assert summary.latest_result_id is None
 
 
 def test_project_filter_and_rename_use_platform_db(tmp_path: Path) -> None:

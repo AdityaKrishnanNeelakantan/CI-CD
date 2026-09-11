@@ -140,7 +140,7 @@ def _run_interaction_job(job_id: str) -> None:
             seed=int(config.get("seed") or 42),
             output_dir=output_dir,
             project_name=Path(str(transcript.get("filename") or "Interaction Twin")).stem,
-            history=PlatformDB(),
+            history=None,
             product_settings=PlatformDB(),
         )
         store.advance_job(job_id, stage="validating_quality", percent=82, message="Validating data quality")
@@ -208,4 +208,3 @@ def _media_type(path: Path) -> str:
     if suffix == ".log":
         return "text/plain"
     return "application/octet-stream"
-

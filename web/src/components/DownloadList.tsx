@@ -16,7 +16,7 @@ export function DownloadList({
           <div>
             <strong>{artifact.filename ?? artifact.name}</strong>
             <span>
-              {artifact.kind ?? artifact.role ?? "artifact"} - {artifact.content_type ?? artifact.media_type}
+              {artifact.kind ?? artifact.role ?? "artifact"} · {artifact.content_type ?? artifact.media_type}
             </span>
           </div>
           {artifact.downloadable && artifact.download_url ? (

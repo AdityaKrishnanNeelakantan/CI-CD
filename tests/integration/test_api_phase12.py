@@ -53,6 +53,66 @@ def test_project_and_run_detail_include_result_links(api_client: TestClient) -> 
     assert run_data["summary"]["row_counts"] == {"users": 3}
 
 
+def test_saved_schema_project_records_show_total_and_per_table_counts(api_client: TestClient) -> None:
+    store = ApiStateStore()
+    bundle = store.create_result_bundle(
+        session_id="session-multi-table-records",
+        workflow_type="schema_twin",
+        preview={
+            "row_counts": {"accounts": 1000, "branches": 1000, "cards": 1000},
+            "tables": {
+                "accounts": [{"id": 1}],
+                "branches": [{"id": 1}],
+                "cards": [{"id": 1}],
+            },
+        },
+        quality_report={"passed": True, "status": "passed"},
+        summary={
+            "row_counts": {"accounts": 1000, "branches": 1000, "cards": 1000},
+            "requested_row_count": 1000,
+            "row_count_mode": "per_table",
+        },
+        artifacts=[],
+    )
+
+    saved = api_client.post(f"/api/results/{bundle['id']}/save")
+    assert saved.status_code == 201
+
+    projects = api_client.get("/api/projects")
+    assert projects.status_code == 200
+    rows = projects.json()["data"]["projects"]
+    saved_row = next(row for row in rows if row["latest_result_id"] == bundle["id"])
+    assert saved_row["records"] == "3,000 total / 1,000 per table"
+
+
+def test_artifact_paths_and_filenames_are_not_exposed_as_result_page_ids(api_client: TestClient) -> None:
+    db = PlatformDB()
+    path_project = db.create_project(name="Path output", workflow_type="schema")
+    path_run = db.record_run(
+        workflow_type="schema",
+        project_id=path_project.id,
+        output_id="/tmp/schema-output",
+    )
+    file_project = db.create_project(name="File output", workflow_type="database")
+    file_run = db.record_run(
+        workflow_type="database",
+        project_id=file_project.id,
+        output_id="database.db",
+    )
+
+    projects = api_client.get("/api/projects").json()["data"]["projects"]
+    by_id = {row["id"]: row for row in projects}
+    assert by_id[path_project.id]["latest_result_id"] is None
+    assert by_id[file_project.id]["latest_result_id"] is None
+
+    path_detail = api_client.get(f"/api/projects/{path_project.id}").json()["data"]["project"]
+    file_detail = api_client.get(f"/api/projects/{file_project.id}").json()["data"]["project"]
+    assert path_detail["runs"][0]["run_id"] == path_run.id
+    assert path_detail["runs"][0]["result_id"] is None
+    assert file_detail["runs"][0]["run_id"] == file_run.id
+    assert file_detail["runs"][0]["result_id"] is None
+
+
 def test_templates_api_and_schema_template_attach(api_client: TestClient) -> None:
     templates = api_client.get("/api/templates")
     assert templates.status_code == 200

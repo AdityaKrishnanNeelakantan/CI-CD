@@ -12,7 +12,7 @@ import { workflows } from "../lib/workflows";
 
 const navItems = [
   { to: "/", label: "Home", Icon: Home },
-  { to: "/projects", label: "My Twin", Icon: FolderKanban },
+  { to: "/projects", label: "My Twins", Icon: FolderKanban },
   { to: "/help", label: "Help & Guides", Icon: HelpCircle }
 ];
 

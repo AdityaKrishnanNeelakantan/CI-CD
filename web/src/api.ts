@@ -162,9 +162,11 @@ export type ProjectSummary = {
   created_at?: string;
   created_on?: string;
   updated_at?: string;
+  updated_on?: string;
   status?: string;
   validation?: string;
   transfer?: string;
+  run_count?: number;
 };
 
 export type RunSummary = {
@@ -172,6 +174,7 @@ export type RunSummary = {
   run_id: string;
   project_id: string;
   workflow_type: string;
+  workflow_label?: string;
   status: string;
   created_at: string;
   updated_at: string;
@@ -180,9 +183,12 @@ export type RunSummary = {
   job_id: string | null;
   validation_status: string | null;
   validation_passed: boolean | null;
+  validation?: string;
   transfer_status: string;
+  transfer?: string;
   transfer_allowed: boolean | null;
   transfer_attempted_at: string | null;
+  records?: string | number;
   metadata: Record<string, unknown>;
 };
 
@@ -234,8 +240,16 @@ export type SaveResultResponse = {
 
 export type DatabaseConfigureRequest = {
   row_count?: number;
+  target_record_count?: number;
   row_counts_by_table?: Record<string, number>;
+  preserve_source_counts?: boolean;
+  scale_factor?: number;
   sample_limit?: number;
+  seed?: number;
+};
+
+export type SampleDatabaseRequest = {
+  customer_count?: number;
   seed?: number;
 };
 
@@ -357,6 +371,18 @@ export function classifyWorkflowIntent(request: WorkflowIntentRequest): Promise<
   });
 }
 
+export async function startDemoPlaceholderRun(request: {
+  message: string;
+  workflow_type: string;
+  intent: WorkflowIntentResponse;
+}): Promise<Job> {
+  const data = await requestJson<{ job: Job }>("/api/demo/placeholder-run", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+  return data.job;
+}
+
 export function getProjects(workflowType?: string): Promise<ProjectsResponse> {
   const query = workflowType ? `?workflow_type=${encodeURIComponent(workflowType)}` : "";
   return requestJson<ProjectsResponse>(`/api/projects${query}`);
@@ -407,6 +433,16 @@ export function uploadDatabaseSource(sessionId: string, file: File, sourceType =
   return requestJson<WorkflowSession>(`/api/database/sessions/${sessionId}/source`, {
     method: "POST",
     body
+  });
+}
+
+export function createDatabaseSampleSource(
+  sessionId: string,
+  request: SampleDatabaseRequest = {}
+): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>(`/api/database/sessions/${sessionId}/sample-source`, {
+    method: "POST",
+    body: JSON.stringify(request)
   });
 }
 

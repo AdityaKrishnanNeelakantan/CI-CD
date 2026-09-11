@@ -82,6 +82,7 @@ class DataQualityChecker:
     # Domain-specific plausibility rules
     PLAUSIBILITY_RULES = {
         # Column name patterns -> (min, max, description)
+        "credit_score": (300, 850, "Credit score"),
         "age": (0, 120, "Human age"),
         "price": (0, 1_000_000, "Price"),
         "quantity": (0, 10_000, "Quantity"),

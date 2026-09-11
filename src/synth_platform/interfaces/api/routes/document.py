@@ -26,7 +26,6 @@ from synth_platform.application.workflows.pdf_twin import (
     run_value_generation,
 )
 from synth_platform.infrastructure.jobs.inline import LocalJobRunner
-from synth_platform.infrastructure.persistence.platform_db import PlatformDB
 from synth_platform.interfaces.api.routes.shared import (
     get_workflow_session_or_404,
     job_response,
@@ -196,7 +195,7 @@ def _run_document_job(job_id: str) -> None:
             doc_id,
             manifest,
             ground_truth_reference=str(source_path),
-            history=PlatformDB(),
+            history=None,
         )
         _ensure_success(validation_result, "document validation")
         validation = load_document_validation_report(
@@ -273,4 +272,3 @@ def _ensure_success(result: Any, stage: str) -> None:
         return
     errors = getattr(result, "errors", None)
     raise RuntimeError(f"{stage} failed: {errors or result}")
-

@@ -94,6 +94,26 @@ def test_first_name_column_is_person_name_not_category():
     assert candidate["status"] == STATUS_PROPOSED
 
 
+def test_manager_name_column_is_person_name_not_category():
+    candidate = infer_single_column(
+        "manager_name",
+        ["Ada Lovelace", "Grace Hopper", "Ada Lovelace", "Alan Turing"] * 10,
+    )
+    assert candidate["semantic_type"] == "person_name"
+    assert candidate["status"] == STATUS_PROPOSED
+    assert "name_pattern=person_name" in candidate["evidence"]
+
+
+def test_branch_name_column_is_category_not_free_text():
+    candidate = infer_single_column(
+        "branch_name",
+        ["Downtown Branch", "Northside Office", "Downtown Branch", "West End Branch"] * 10,
+    )
+    assert candidate["semantic_type"] == "category"
+    assert candidate["status"] == STATUS_PROPOSED
+    assert "name_pattern=branch_name" in candidate["evidence"]
+
+
 def test_phone_column_with_repeated_real_numbers_is_phone_number_not_category():
     """Regression: found the same way as the person_name gap - a real
     phone column with a handful of numbers repeated across patients (a

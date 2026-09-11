@@ -104,3 +104,79 @@ def test_llm_unavailable_falls_back_to_rules() -> None:
     data = response.json()["data"]
     assert data["workflow_type"] == "schema_twin"
     assert data["prefill"]["record_count"] == 10000
+
+
+def test_plain_data_count_prefills_record_count() -> None:
+    client = TestClient(app)
+    response = client.post("/api/intent/workflow", json={"message": "generate 1000 data"})
+
+    data = response.json()["data"]
+    assert data["prefill"]["record_count"] == 1000
+
+
+def test_prompt_configurable_options_are_prefilled() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/intent/workflow",
+        json={
+            "message": "Generate 1000 data as parquet for Indian locale with strict privacy seed 77 sample 25 using OCR and LLM text"
+        },
+    )
+
+    data = response.json()["data"]
+    assert data["prefill"]["record_count"] == 1000
+    assert data["prefill"]["output_format"] == "parquet"
+    assert data["prefill"]["privacy_level"] == "strict"
+    assert data["prefill"]["other"]["locale"] == "en_IN"
+    assert data["prefill"]["other"]["seed"] == 77
+    assert data["prefill"]["other"]["sample_limit"] == 25
+    assert data["prefill"]["other"]["extraction_method"] == "ocr"
+    assert data["prefill"]["other"]["llm_text_enabled"] is True
+
+
+def test_prompt_redaction_options_are_prefilled() -> None:
+    client = TestClient(app)
+    response = client.post("/api/intent/workflow", json={"message": "Generate customer chats as logs with no redaction seed 12"})
+
+    data = response.json()["data"]
+    assert data["workflow_type"] == "interaction_twin"
+    assert data["prefill"]["output_format"] == "logs"
+    assert data["prefill"]["other"]["remove_sensitive_information"] is False
+    assert data["prefill"]["other"]["seed"] == 12
+
+
+def test_demo_placeholder_run_returns_completed_job() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/demo/placeholder-run",
+        json={
+            "message": "show me a demo database twin",
+            "workflow_type": "database_twin",
+            "intent": {"workflow_type": "database_twin", "prefill": {"record_count": 1000}},
+        },
+    )
+
+    assert response.status_code == 201
+    data = response.json()["data"]
+    assert data["job"]["status"] == "succeeded"
+    assert data["job"]["result_id"]
+    result = client.get(f"/api/results/{data['job']['result_id']}").json()["data"]
+    assert result["summary"]["requested_row_count"] == 1000
+
+
+def test_database_sample_source_creates_readable_sqlite_session() -> None:
+    client = TestClient(app)
+    session_response = client.post("/api/database/sessions", json={"intent": "sample database demo"})
+    session_id = session_response.json()["data"]["id"]
+
+    response = client.post(
+        f"/api/database/sessions/{session_id}/sample-source",
+        json={"customer_count": 50, "seed": 42},
+    )
+
+    assert response.status_code == 200
+    source = response.json()["data"]["state"]["source"]
+    assert source["filename"] == "database_a.db"
+    assert source["source_type"] == "sqlite"
+    assert set(source["tables"]) == {"customer", "account", "transaction"}
+    assert source["sample"] == {"customer_count": 50, "seed": 42}

@@ -117,7 +117,7 @@ _NAME_EMAIL_RE = re.compile(r"email", re.IGNORECASE)
 # product_name stay eligible for ordinary category/free_text treatment.
 _NAME_PERSON_RE = re.compile(
     r"(^name$|(^|_)((first|last|given|family|middle|maiden|sur)_?names?|"
-    r"full_?name|customer_?name|client_?name|patient_?name|contact_?name)$)",
+    r"full_?name|customer_?name|client_?name|patient_?name|contact_?name|manager_?name)$)",
     re.IGNORECASE,
 )
 _NAME_DATETIME_RE = re.compile(r"(^|_)(date|dt|time|timestamp|at)$", re.IGNORECASE)
@@ -134,6 +134,7 @@ _NAME_COMPANY_RE = re.compile(
     r"(^|_)(company|organization|organisation|employer|business|facility|provider|hospital|clinic|vendor|supplier)(_?name)?$",
     re.IGNORECASE,
 )
+_NAME_BRANCH_RE = re.compile(r"(^|_)(branch|office|location)(_?name)?$", re.IGNORECASE)
 
 _EMAIL_VALUE_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Multi-token title-ish values ("Ada Lovelace"). Single tokens and long
@@ -143,7 +144,7 @@ _PERSON_NAME_VALUE_RE = re.compile(
     r"^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]+)+$"
 )
 _ORG_OR_THING_NAME_RE = re.compile(
-    r"(company|facility|provider|product|organisation|organization|business|hospital|clinic|vendor|supplier)",
+    r"(branch|office|location|company|facility|provider|product|organisation|organization|business|hospital|clinic|vendor|supplier)",
     re.IGNORECASE,
 )
 # A pure char-class/length regex (like the postcode ones below) is not
@@ -228,6 +229,8 @@ def _score_name(column_name: str, board: _ScoreBoard, config: InferenceConfig) -
         board.add("boolean", config.w_name_boolean, "name_pattern=boolean")
     if _NAME_CATEGORY_CODE_RE.search(column_name) and not _NAME_POSTAL_RE.search(column_name):
         board.add("category", config.w_name_category_code, "name_pattern=category_code")
+    if _NAME_BRANCH_RE.search(column_name):
+        board.add("category", config.w_name_category_code, "name_pattern=branch_name")
     if _NAME_FREE_TEXT_RE.search(column_name):
         board.add("free_text", config.w_name_free_text, "name_pattern=free_text")
 
@@ -614,4 +617,3 @@ class SemanticInferenceEngine:
             "evidence": board.evidence,
             "alternatives": alternatives,
         }
-

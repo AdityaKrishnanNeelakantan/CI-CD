@@ -272,6 +272,7 @@ class SmartValueGenerator:
         "credit_card": ["credit_card", "card_number", "pan"],
         
         # HR/Employment
+        "person_name": ["manager_name", "supervisor_name", "employee_name", "staff_name"],
         "job_title": ["job_title", "position", "role", "designation"],
         "department": ["department", "division", "unit", "team"],
         "skill": ["skill", "competency", "expertise", "qualification"],
@@ -303,6 +304,7 @@ class SmartValueGenerator:
         "city": ["city", "town", "municipality", "metro"],
         "country": ["country", "nation", "region"],
         "address": ["address", "location", "street", "postal"],
+        "branch_name": ["branch_name", "office_name", "location_name"],
         
         # NEW: Business
         "company_name": ["company", "organization", "business", "corporation", "enterprise", "firm"],
@@ -656,6 +658,17 @@ class SmartValueGenerator:
             "Team Plan", "Individual Plan", "Student Plan", "Nonprofit Plan",
             "Annual Pro", "Monthly Basic", "Lifetime Access", "Pay-As-You-Go",
         ],
+        "person_name": [
+            "Avery Johnson", "Maya Patel", "Jordan Lee", "Sofia Martinez",
+            "Noah Williams", "Priya Shah", "Elena Garcia", "Marcus Chen",
+            "Amara Wilson", "Daniel Kim", "Nina Brown", "Owen Davis",
+        ],
+        "branch_name": [
+            "Downtown Branch", "Northside Office", "Central Financial Center",
+            "West End Branch", "Lakeside Service Center", "Market Street Office",
+            "Riverside Branch", "Midtown Financial Center", "Oak Park Office",
+            "Southgate Branch", "Hillcrest Service Center", "Union Square Branch",
+        ],
         # Generic fallbacks for common column patterns
         "name": [
             "Alpha Project", "Beta Initiative", "Gamma Solution", "Delta System",
@@ -913,7 +926,12 @@ Return ONLY a JSON array of strings, no explanation. Example:
             col_lower = column_name.lower()
             # Try to match generic patterns
             if "name" in col_lower:
-                domain = "name"
+                if "manager" in col_lower or "supervisor" in col_lower:
+                    domain = "person_name"
+                elif "branch" in col_lower or "office" in col_lower or "location" in col_lower:
+                    domain = "branch_name"
+                else:
+                    domain = "name"
             elif "desc" in col_lower or "about" in col_lower:
                 domain = "description"
             elif "title" in col_lower:

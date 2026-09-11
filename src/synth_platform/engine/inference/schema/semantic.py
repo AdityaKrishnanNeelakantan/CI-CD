@@ -55,9 +55,14 @@ SEMANTIC_PATTERNS: List[Tuple[str, str, Dict[str, Any]]] = [
         {"choices": ["credit", "debit", "prepaid", "charge"]},
     ),
     (
-        r"^account_?type$|^account_?status$",
+        r"^account_?type$",
         "categorical",
-        {"choices": ["checking", "savings", "credit", "loan", "closed"]},
+        {"choices": ["checking", "savings", "money_market", "certificate_of_deposit"]},
+    ),
+    (
+        r"^account_?status$",
+        "categorical",
+        {"choices": ["active", "inactive", "dormant", "closed"]},
     ),
     (
         r"^loan_?type$|^loan_?status$",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, is_dataclass
+import copy
 from datetime import datetime
 from enum import Enum
 import math
@@ -542,7 +543,11 @@ def _locale_domain_fit(tables: Dict[str, pd.DataFrame], schema_config: Any) -> D
             })
 
         city_col = lower_columns.get("city")
-        if pack and city_col and pack.top_cities:
+        country_matches_locale = (
+            country_col is None
+            or df[country_col].astype(str).eq(pack.country_name).all()
+        ) if pack else False
+        if pack and city_col and pack.top_cities and country_matches_locale:
             sample = df[city_col].astype(str)
             matching = int(sample.isin(pack.top_cities).sum())
             ratio = matching / max(len(sample), 1)
@@ -620,10 +625,24 @@ def build_validation_report(
     """
     from synth_platform.engine.validation.schema.quality import check_quality
 
+    # Independently sampled parent/child tables cannot prove referential
+    # integrity: valid child keys routinely reference parent rows outside the
+    # bounded parent sample. Exact export validation remains authoritative.
+    sampled_relationships = getattr(schema_config, "relationships", [])
+    if sampled and export_validation:
+        sampled_relationships = []
+
     validation = validation_report or validate_data(tables, schema_config)
+    if sampled and export_validation and export_validation.get("fk_passed"):
+        validation = copy.deepcopy(validation)
+        validation.issues = [
+            issue
+            for issue in getattr(validation, "issues", [])
+            if "orphan reference" not in str(getattr(issue, "message", "")).lower()
+        ]
     quality = quality_report or check_quality(
         tables,
-        relationships=getattr(schema_config, "relationships", []),
+        relationships=sampled_relationships,
         schema=schema_config,
     )
     advisory_reports = analyze_generation(
@@ -650,7 +669,7 @@ def build_validation_report(
         hard_passed = bool(export_validation.get("passed"))
 
     advisory_fidelity = {
-        "passed": None if sampled else bool(getattr(advisory_reports["fidelity"], "overall_score", 0) >= 70),
+        "passed": bool(getattr(advisory_reports["fidelity"], "overall_score", 0) >= 70),
         "note": "Sampled advisory fidelity, not exact full-data validation." if sampled else None,
     }
 

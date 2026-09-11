@@ -49,6 +49,14 @@ JOB_TITLES = _JOB_TITLES_BY_DOMAIN["generic"]
 
 COUNTRIES = list(CITIES_BY_COUNTRY.keys())
 
+_COUNTRY_ALIASES = {
+    "us": "United States",
+    "usa": "United States",
+    "united states of america": "United States",
+    "uk": "United Kingdom",
+    "gb": "United Kingdom",
+}
+
 # Product name pools — now sourced from the rich seed pools
 PRODUCT_NAME_POOLS = PRODUCT_BY_CATEGORY
 
@@ -58,6 +66,8 @@ PRODUCT_DESCRIPTION_TEMPLATES = [
     "A customer favorite for comfort, performance, and long-term value.",
     "Combines premium materials with practical features for daily use.",
 ]
+
+BRANCH_SUFFIXES = ["Branch", "Office", "Financial Center", "Service Center", "Operations Center"]
 
 
 class RealisticTextGenerator:
@@ -174,6 +184,8 @@ class RealisticTextGenerator:
                     for _ in range(size)
                 ]
             )
+        if semantic == "branch_name":
+            return self._generate_branch_name(size=size)
         if semantic == "job_title":
             if faker:
                 try:
@@ -293,6 +305,12 @@ class RealisticTextGenerator:
             return "email"
         if "company" in name or "organization" in name:
             return "company_name"
+        if name in ("manager_name", "supervisor_name"):
+            return "person_name"
+        if name in ("branch_name", "office_name", "location_name") or (
+            "branch" in table and name == "name"
+        ):
+            return "branch_name"
         if "username" in name:
             return "username"
         if "job" in name or "role" in name or "title" in name:
@@ -344,6 +362,25 @@ class RealisticTextGenerator:
         if name in ("body", "description", "summary"):
             return "product_description"
         return "description"
+
+    def _generate_branch_name(self, *, size: int) -> np.ndarray:
+        faker = self._get_faker()
+        if faker:
+            return np.array(
+                [
+                    f"{faker.city()} {self.rng.choice(BRANCH_SUFFIXES)}"
+                    for _ in range(size)
+                ]
+            )
+        cities = self._vocabulary("city", [])
+        if not cities:
+            cities = COUNTRY_CITIES["United States"]
+        return np.array(
+            [
+                f"{self.rng.choice(cities)} {self.rng.choice(BRANCH_SUFFIXES)}"
+                for _ in range(size)
+            ]
+        )
 
     def _generate_caption(self, *, size: int, table_data: Optional[pd.DataFrame] = None) -> np.ndarray:  # noqa: ARG002
         _TEMPLATES = [
@@ -796,51 +833,13 @@ class EntityCoherenceEngine:
         df.loc[mismatch_mask, "username"] = desired[mismatch_mask]
 
     def _fix_geography(self, df: pd.DataFrame, columns: set[str], protected: set[str], mode: str) -> None:
-        if "country" not in columns:
-            return
-        countries = df["country"].astype(str)
-        capsule_states = self.text_generator._vocabulary("state", [])
-        capsule_cities = self.text_generator._vocabulary("city", [])
-
-        if "state" in columns and "state" not in protected:
-            if capsule_states:
-                desired_states = np.array([self.rng.choice(capsule_states) for _ in countries])
-            else:
-                desired_states = np.array([
-                    self.rng.choice(COUNTRY_STATES.get(country, COUNTRY_STATES["United States"]))
-                    for country in countries
-                ])
-            current = df["state"].astype(str)
-            if capsule_states:
-                mismatch = ~current.isin(capsule_states).to_numpy()
-            else:
-                mismatch = np.array([
-                    current.iloc[i] not in COUNTRY_STATES.get(country, COUNTRY_STATES["United States"])
-                    for i, country in enumerate(countries)
-                ])
-            if mode == "strict":
-                mismatch[:] = True
-            df.loc[mismatch, "state"] = desired_states[mismatch]
-
-        if "city" in columns and "city" not in protected:
-            if capsule_cities:
-                desired_cities = np.array([self.rng.choice(capsule_cities) for _ in countries])
-            else:
-                desired_cities = np.array([
-                    self.rng.choice(COUNTRY_CITIES.get(country, COUNTRY_CITIES["United States"]))
-                    for country in countries
-                ])
-            current = df["city"].astype(str)
-            if capsule_cities:
-                mismatch = ~current.isin(capsule_cities).to_numpy()
-            else:
-                mismatch = np.array([
-                    current.iloc[i] not in COUNTRY_CITIES.get(country, COUNTRY_CITIES["United States"])
-                    for i, country in enumerate(countries)
-                ])
-            if mode == "strict":
-                mismatch[:] = True
-            df.loc[mismatch, "city"] = desired_cities[mismatch]
+        _fix_known_geography(
+            df,
+            columns,
+            self.rng,
+            protected=protected,
+            force_resample=mode == "strict",
+        )
 
     def _fix_age_role(self, df: pd.DataFrame, columns: set[str], protected: set[str]) -> None:
         if "age" in protected or "age" not in columns:
@@ -929,10 +928,122 @@ def apply_realism_rules(
     _fix_email_from_name(df, columns, _rng)
     _fix_slug_from_name(df, columns)
 
+    # ── Geographic consistency ──
+    # This is a correctness repair rather than optional cosmetic realism. Schema
+    # uploads frequently declare City/Country as separate categoricals, so their
+    # marginal samplers otherwise create known-invalid tuples.
+    _fix_known_geography(df, columns, _rng)
+    _fix_branch_name_from_city(df, columns)
+
     # ── Status consistency ──
     _apply_status_end_date(df, columns, _rng)
 
     return df
+
+
+def apply_linked_field_rules(
+    df: pd.DataFrame,
+    *,
+    rng: Optional[np.random.Generator] = None,
+) -> pd.DataFrame:
+    """Apply non-optional, high-confidence linked-field correctness rules."""
+    if df.empty:
+        return df
+    output = df.copy()
+    resolved_rng = rng if rng is not None else np.random.default_rng(42)
+    _fix_known_geography(output, output.columns, resolved_rng)
+    _fix_branch_name_from_city(output, output.columns)
+    return output
+
+
+def _semantic_column(columns: Iterable[str], semantic: str) -> Optional[str]:
+    """Find a semantic field without assuming lowercase schema headers."""
+    normalized = {
+        str(column).lower().replace("-", "_").replace(" ", "_"): str(column)
+        for column in columns
+    }
+    if semantic in normalized:
+        return normalized[semantic]
+    suffix = f"_{semantic}"
+    return next((original for name, original in normalized.items() if name.endswith(suffix)), None)
+
+
+def _canonical_country(value: object) -> Optional[str]:
+    normalized = str(value).strip().casefold()
+    alias = _COUNTRY_ALIASES.get(normalized)
+    if alias:
+        return alias
+    return next((country for country in COUNTRY_CITIES if country.casefold() == normalized), None)
+
+
+def _fix_known_geography(
+    df: pd.DataFrame,
+    columns: Iterable[str],
+    rng: np.random.Generator,
+    *,
+    protected: Optional[set[str]] = None,
+    force_resample: bool = False,
+) -> None:
+    """Repair known-invalid City/Country and State/Country tuples.
+
+    Flat capsule vocabularies cannot prove that two values belong together. This
+    routine therefore validates against the same conditional lookup used to
+    generate geography. For a recognized country, values outside its configured
+    pool are resampled; unknown countries are left untouched.
+    """
+    column_names = list(columns)
+    country_column = _semantic_column(column_names, "country")
+    if country_column is None:
+        return
+
+    protected_normalized = {str(name).casefold() for name in (protected or set())}
+    country_values = df[country_column].astype(str).tolist()
+
+    for semantic, lookup in (("state", COUNTRY_STATES), ("city", COUNTRY_CITIES)):
+        value_column = _semantic_column(column_names, semantic)
+        if value_column is None or value_column.casefold() in protected_normalized:
+            continue
+
+        allowed_by_country = {
+            country: {str(value).casefold() for value in values}
+            for country, values in lookup.items()
+        }
+        current_values = df[value_column].astype(str).tolist()
+        replacements: list[object] = list(current_values)
+        mismatch = np.zeros(len(df), dtype=bool)
+
+        for index, (country_value, current_value) in enumerate(zip(country_values, current_values)):
+            country = _canonical_country(country_value)
+            if country is None or country not in lookup:
+                continue
+            allowed = lookup[country]
+            is_valid = str(current_value).casefold() in allowed_by_country[country]
+            if force_resample or not is_valid:
+                mismatch[index] = True
+                replacements[index] = rng.choice(allowed)
+
+        if mismatch.any():
+            df.loc[mismatch, value_column] = np.asarray(replacements, dtype=object)[mismatch]
+
+
+def _fix_branch_name_from_city(df: pd.DataFrame, columns: Iterable[str]) -> None:
+    """Keep an explicit branch name aligned with its generated city."""
+    column_names = list(columns)
+    city_column = _semantic_column(column_names, "city")
+    branch_column = _semantic_column(column_names, "branch_name")
+    if city_column is None or branch_column is None:
+        return
+
+    suffix_pattern = re.compile(
+        rf"\b({'|'.join(re.escape(suffix) for suffix in BRANCH_SUFFIXES)})$",
+        flags=re.IGNORECASE,
+    )
+    names = []
+    for city, current_name in zip(df[city_column].astype(str), df[branch_column].astype(str)):
+        suffix_match = suffix_pattern.search(current_name.strip())
+        suffix = suffix_match.group(1) if suffix_match else "Branch"
+        names.append(f"{city} {suffix}")
+    df[branch_column] = np.asarray(names, dtype=object)
 
 
 # ─── TEMPORAL RULES ───────────────────────────────────────────────────────────

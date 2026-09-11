@@ -77,6 +77,29 @@ a {
   text-decoration: underline;
 }
 
+.project-name-link {
+  color: var(--primary-hover);
+  font-weight: 780;
+  line-height: 1.25;
+}
+
+.project-name-link:hover span,
+.inline-link:hover {
+  text-decoration: underline;
+}
+
+.inline-link {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.mono-token {
+  color: var(--muted-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem;
+}
+
 h1,
 h2,
 h3,
@@ -325,6 +348,24 @@ h3 {
   color: var(--muted-strong);
 }
 
+.status-chip.passed {
+  background: var(--success-soft);
+  border-color: #bcefd6;
+  color: var(--success);
+}
+
+.status-chip.failed {
+  background: var(--danger-soft);
+  border-color: #ffd1d7;
+  color: var(--danger);
+}
+
+.status-chip.pending {
+  background: var(--warning-soft);
+  border-color: #f7e5a4;
+  color: #8a5a00;
+}
+
 .content,
 .page-stack {
   display: grid;
@@ -415,15 +456,52 @@ label {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   margin-top: auto;
-  padding: 14px;
+  overflow: hidden;
   width: 100%;
+}
+
+.home-chat-entry:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring), var(--shadow-sm);
+}
+
+.home-chat-entry > div {
+  display: block;
+  position: relative;
+}
+
+.home-chat-entry input[aria-label="Workflow request"] {
+  border: 0;
+  border-radius: 0;
+  min-height: 58px;
+  padding-left: 58px;
+  padding-right: 58px;
+}
+
+.home-chat-entry input[aria-label="Workflow request"]:focus {
+  outline: 0;
+}
+
+.home-chat-entry .attachment-button,
+.home-chat-entry > div > button {
+  position: absolute;
+  top: 8px;
+  z-index: 1;
+}
+
+.home-chat-entry .attachment-button {
+  left: 8px;
+}
+
+.home-chat-entry > div > button {
+  right: 8px;
 }
 
 .attached-file {
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 700;
-  padding-left: 50px;
+  padding: 0 14px 12px 58px;
 }
 
 .intent-result,
@@ -707,7 +785,10 @@ a:focus-visible {
 .upload-panel,
 .config-grid,
 .summary-grid,
-.table-count-grid {
+.table-count-grid,
+.source-summary,
+.table-summary,
+.capability-list {
   display: grid;
   gap: 14px;
 }
@@ -719,6 +800,83 @@ a:focus-visible {
 
 .table-count-grid {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.table-summary-row,
+.capability-item,
+.segmented-control {
+  align-items: center;
+  display: flex;
+}
+
+.table-summary-row {
+  background: #f8fbff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  gap: 10px;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 10px 12px;
+}
+
+.table-summary-row strong,
+.capability-item strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.table-summary-row span,
+.capability-item span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.segmented-control {
+  background: #edf5ff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  gap: 4px;
+  padding: 4px;
+}
+
+.segmented-control button {
+  background: transparent;
+  border-radius: 6px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  flex: 1 1 0;
+  font-weight: 780;
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.segmented-control button.active {
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  color: var(--primary-hover);
+}
+
+.segmented-control button:disabled {
+  color: #9aa9bd;
+  cursor: not-allowed;
+}
+
+.capability-item {
+  border-top: 1px solid var(--border);
+  gap: 10px;
+  min-width: 0;
+  padding-top: 12px;
+}
+
+.capability-item svg {
+  color: var(--primary);
+  flex: 0 0 auto;
+}
+
+.capability-item span {
+  min-width: 112px;
 }
 
 .file-drop {
@@ -887,6 +1045,12 @@ button:disabled,
   color: var(--success);
 }
 
+.warning {
+  background: var(--warning-soft);
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+
 .progress-panel {
   display: grid;
   gap: 16px;
@@ -939,14 +1103,30 @@ button:disabled,
 }
 
 .timeline li span {
+  align-items: center;
   border: 2px solid currentColor;
   border-radius: 999px;
+  display: flex;
+  flex: 0 0 auto;
   height: 13px;
+  justify-content: center;
   width: 13px;
 }
 
 .timeline li.active {
   color: var(--primary-hover);
+}
+
+.timeline li.done {
+  color: var(--success);
+}
+
+.timeline li.done span {
+  border: 0;
+}
+
+.timeline li.failed {
+  color: var(--danger);
 }
 
 .status-message {
@@ -994,13 +1174,64 @@ button:disabled,
 .download-row {
   background: var(--surface);
   justify-content: space-between;
-  gap: 12px;
+  gap: 18px;
   min-height: 66px;
   padding: 12px 14px;
 }
 
+.download-row > div {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 6px;
+  min-width: 0;
+}
+
+.download-row strong {
+  overflow-wrap: anywhere;
+}
+
+.download-row .icon-button,
+.download-row .muted {
+  flex: 0 0 auto;
+}
+
 .download-row + .download-row {
   border-top: 1px solid #e9f0f8;
+}
+
+.preview-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.table-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.table-switcher button {
+  align-items: center;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted-strong);
+  display: flex;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 11px;
+}
+
+.table-switcher button.active {
+  background: var(--primary-soft);
+  border-color: #b9dcff;
+  color: var(--primary-hover);
+}
+
+.table-switcher span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 820;
 }
 
 .resource-page {
@@ -1066,6 +1297,35 @@ button:disabled,
   overflow: auto;
 }
 
+.data-table {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.table-pagination,
+.pagination-actions {
+  align-items: center;
+  display: flex;
+}
+
+.table-pagination {
+  color: var(--muted);
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  gap: 10px 20px;
+  justify-content: space-between;
+}
+
+.pagination-actions {
+  gap: 10px;
+}
+
+.pagination-actions .secondary {
+  min-height: 34px;
+  padding: 6px 12px;
+}
+
 table {
   border-collapse: collapse;
   font-size: 0.86rem;
@@ -1079,7 +1339,12 @@ td {
   padding: 11px 13px;
   text-align: left;
   vertical-align: top;
-  white-space: nowrap;
+}
+
+td {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 th {
@@ -1090,6 +1355,7 @@ th {
   position: sticky;
   text-transform: uppercase;
   top: 0;
+  white-space: nowrap;
 }
 
 tbody tr:hover td {

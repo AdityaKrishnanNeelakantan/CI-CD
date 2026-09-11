@@ -126,6 +126,34 @@ def test_person_name_columns_are_never_learned_from_or_equal_to_source_values():
     assert not set(generated["last_name"]) & set(df["last_name"])
 
 
+def test_manager_and_branch_names_use_context_generators_not_generic_descriptions():
+    df = pd.DataFrame(
+        {
+            "branch_id": [f"BR-{i:03d}" for i in range(20)],
+            "branch_name": ["Downtown Branch", "Northside Office", "West End Branch", "Market Street Office"] * 5,
+            "manager_name": ["Ada Lovelace", "Grace Hopper", "Alan Turing", "Katherine Johnson"] * 5,
+        }
+    )
+    contract = {
+        "primary_key": ["branch_id"],
+        "columns": {
+            "branch_id": approved("identifier"),
+            "branch_name": approved("category"),
+            "manager_name": approved("person_name"),
+        },
+    }
+    adapter = small_adapter()
+    evidence = adapter.fit(df, "branches", contract, seed=1)
+    assert not evidence["excluded_columns"]
+
+    generated = adapter.sample(30, seed=1)
+    assert not set(generated["manager_name"]) & set(df["manager_name"])
+    assert not set(generated["branch_name"]) & set(df["branch_name"])
+    assert generated["manager_name"].str.split().map(len).ge(2).all()
+    assert generated["branch_name"].str.contains("Branch|Office|Financial Center|Service Center").all()
+    assert not generated["branch_name"].str.contains("performance|materials|features", case=False).any()
+
+
 def test_phone_number_columns_are_never_learned_from_or_equal_to_source_values():
     """Regression: found the same way as person_name above - a phone
     column with a handful of real numbers repeated across rows (found on

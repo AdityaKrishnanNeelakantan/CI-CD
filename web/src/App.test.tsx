@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
@@ -11,6 +11,45 @@ const session = {
   state: {},
   created_at: "2026-09-11T00:00:00Z",
   updated_at: "2026-09-11T00:00:00Z"
+};
+
+const documentSession = {
+  ...session,
+  id: "document-session-1",
+  workflow: "pdf_twin",
+  workflow_type: "pdf_twin",
+  state: { document: { filename: "report.pdf", size: 8 } }
+};
+
+const databaseSession = {
+  ...session,
+  id: "database-session-1",
+  workflow: "database_twin",
+  workflow_type: "database_twin",
+  state: {
+    source: {
+      filename: "database_a.db",
+      source_type: "sqlite",
+      size: 4096,
+      table_names: ["account", "customer", "transaction"],
+      total_rows: 14,
+      source_rows_by_table: { account: 4, customer: 3, transaction: 7 },
+      warnings: [],
+      tables: [
+        { name: "account", row_count: 4, columns: ["id", "customer_id", "balance"], column_count: 3 },
+        { name: "customer", row_count: 3, columns: ["id", "segment", "age"], column_count: 3 },
+        { name: "transaction", row_count: 7, columns: ["id", "account_id", "amount"], column_count: 3 }
+      ]
+    }
+  }
+};
+
+const interactionSession = {
+  ...session,
+  id: "interaction-session-1",
+  workflow: "interaction_twin",
+  workflow_type: "interaction_twin",
+  state: { transcript: { filename: "support.log", turn_count: 2 } }
 };
 
 const queuedJob = {
@@ -48,12 +87,14 @@ const resultBundle = {
   workflow_type: "schema_twin",
   status: "available",
   preview: {
+    row_counts: { users: 1000, orders: 500 },
     tables: {
-      users: [{ user_id: 1, status: "active" }]
+      users: Array.from({ length: 25 }, (_, index) => ({ user_id: `user-${index + 1}`, status: "active" })),
+      orders: [{ order_id: 100, total: 42.5 }]
     }
   },
   quality_report: { status: "passed", passed: true },
-  summary: { table_count: 1, row_count: 5 },
+  summary: { row_counts: { users: 1000, orders: 500 }, requested_row_count: 1000, row_count_mode: "per_table" },
   artifacts: [
     {
       id: "artifact-1",
@@ -113,6 +154,7 @@ const projectDetail = {
       run_id: "run-1",
       project_id: "project-1",
       workflow_type: "schema",
+      workflow_label: "Schema",
       status: "completed",
       created_at: "2026-09-11T00:00:00Z",
       updated_at: "2026-09-11T00:00:00Z",
@@ -121,9 +163,12 @@ const projectDetail = {
       job_id: "job-1",
       validation_status: "passed",
       validation_passed: true,
+      validation: "Passed",
       transfer_status: "not_attempted",
+      transfer: "Not attempted",
       transfer_allowed: null,
       transfer_attempted_at: null,
+      records: "5 total",
       metadata: {}
     }
   ]
@@ -224,18 +269,34 @@ function installFetchMock() {
           }
         });
       }
+      const workflowType = filename?.endsWith(".json") || filename?.endsWith(".sql")
+        ? "schema_twin"
+        : body.message?.includes("database")
+          ? "database_twin"
+          : filename?.endsWith(".pdf")
+            ? "document_twin"
+            : "interaction_twin";
+      const recordCount = body.message?.includes("1000") ? 1000 : null;
+      const other: Record<string, unknown> = {};
+      if (body.message?.includes("seed 77")) other.seed = 77;
+      if (body.message?.includes("indian")) other.locale = "en_IN";
+      if (body.message?.includes("no redaction")) other.remove_sensitive_information = false;
+      if (body.message?.includes("sample 25")) other.sample_limit = 25;
+      const outputFormat = body.message?.includes("parquet") ? "parquet" : body.message?.includes("json") ? "json" : null;
       return jsonResponse({
         data: {
-          workflow_type: filename?.endsWith(".pdf") ? "document_twin" : "interaction_twin",
+          workflow_type: workflowType,
           confidence: filename?.endsWith(".pdf") ? 0.92 : 0.86,
           reason: filename?.endsWith(".pdf")
             ? "PDF document upload; Prompt mentions pdf"
-            : "Prompt mentions customer chats",
-          suggested_route: filename?.endsWith(".pdf") ? "/document" : "/interaction",
+            : workflowType === "database_twin"
+              ? "Prompt mentions database"
+              : "Prompt mentions customer chats",
+          suggested_route: workflowType === "database_twin" ? "/database" : filename?.endsWith(".pdf") ? "/document" : "/interaction",
           can_auto_start: false,
           next_action: "configure_required",
           detected_input: { kind: filename?.endsWith(".pdf") ? "document" : "natural_language", file_type: filename ? filename.split(".").pop() : null, source: filename ? "attachment" : "prompt" },
-          prefill: { record_count: null, privacy_level: null, output_format: null, interaction_type: "support_chat", document_type: "document", other: {} },
+          prefill: { record_count: recordCount, privacy_level: null, output_format: outputFormat, interaction_type: "support_chat", document_type: "document", other },
           alternatives: [],
           warnings: filename?.endsWith(".parquet") ? ["Parquet is not currently supported from chat routing."] : []
         }
@@ -243,6 +304,48 @@ function installFetchMock() {
     }
     if (url === "/api/schema/sessions" && method === "POST") {
       return jsonResponse({ data: session }, 201);
+    }
+    if (url === "/api/database/sessions" && method === "POST") {
+      return jsonResponse({ data: { ...databaseSession, state: {} } }, 201);
+    }
+    if (url === "/api/database/sessions/database-session-1/source" && method === "POST") {
+      return jsonResponse({ data: databaseSession });
+    }
+    if (url === "/api/database/sessions/database-session-1/sample-source" && method === "POST") {
+      return jsonResponse({ data: databaseSession });
+    }
+    if (url === "/api/database/sessions/database-session-1/configure" && method === "POST") {
+      return jsonResponse({ data: { ...databaseSession, state: { ...databaseSession.state, config: {} } } });
+    }
+    if (url === "/api/database/sessions/database-session-1/generate" && method === "POST") {
+      return jsonResponse({ data: { job: { ...queuedJob, id: "database-job-1", job_id: "database-job-1", workflow_type: "database_twin", session_id: "database-session-1" } } }, 202);
+    }
+    if (url === "/api/document/sessions" && method === "POST") {
+      return jsonResponse({ data: documentSession }, 201);
+    }
+    if (url === "/api/document/sessions/document-session-1/upload" && method === "POST") {
+      return jsonResponse({ data: documentSession });
+    }
+    if (url === "/api/document/sessions/document-session-1/configure" && method === "POST") {
+      return jsonResponse({ data: documentSession });
+    }
+    if (url === "/api/document/sessions/document-session-1/generate" && method === "POST") {
+      return jsonResponse({ data: { job: { ...queuedJob, id: "document-job-1", job_id: "document-job-1", workflow_type: "pdf_twin", session_id: "document-session-1" } } }, 202);
+    }
+    if (url === "/api/interaction/sessions" && method === "POST") {
+      return jsonResponse({ data: interactionSession }, 201);
+    }
+    if (url === "/api/interaction/sessions/interaction-session-1/upload" && method === "POST") {
+      return jsonResponse({ data: interactionSession });
+    }
+    if (url === "/api/interaction/sessions/interaction-session-1/configure" && method === "POST") {
+      return jsonResponse({ data: interactionSession });
+    }
+    if (url === "/api/interaction/sessions/interaction-session-1/generate" && method === "POST") {
+      return jsonResponse({ data: { job: { ...queuedJob, id: "interaction-job-1", job_id: "interaction-job-1", workflow_type: "interaction_twin", session_id: "interaction-session-1" } } }, 202);
+    }
+    if (url === "/api/demo/placeholder-run" && method === "POST") {
+      return jsonResponse({ data: { job: { ...succeededJob, id: "demo-job-1", job_id: "demo-job-1", kind: "demo.placeholder", workflow_type: "database_twin" } } }, 201);
     }
     if (url === "/api/schema/sessions/session-1/schema-file" && method === "POST") {
       return jsonResponse({
@@ -265,6 +368,18 @@ function installFetchMock() {
     }
     if (url === "/api/jobs/job-1") {
       return jsonResponse({ data: succeededJob });
+    }
+    if (url === "/api/jobs/document-job-1") {
+      return jsonResponse({ data: { ...succeededJob, id: "document-job-1", job_id: "document-job-1", workflow_type: "pdf_twin", session_id: "document-session-1" } });
+    }
+    if (url === "/api/jobs/database-job-1") {
+      return jsonResponse({ data: { ...succeededJob, id: "database-job-1", job_id: "database-job-1", workflow_type: "database_twin", session_id: "database-session-1" } });
+    }
+    if (url === "/api/jobs/interaction-job-1") {
+      return jsonResponse({ data: { ...succeededJob, id: "interaction-job-1", job_id: "interaction-job-1", workflow_type: "interaction_twin", session_id: "interaction-session-1" } });
+    }
+    if (url === "/api/jobs/demo-job-1") {
+      return jsonResponse({ data: { ...succeededJob, id: "demo-job-1", job_id: "demo-job-1", kind: "demo.placeholder", workflow_type: "database_twin" } });
     }
     if (url === "/api/results/result-1") {
       return jsonResponse({ data: resultBundle });
@@ -297,11 +412,13 @@ function installFetchMock() {
               name: "Schema Twin Result",
               workflow_type: "schema",
               workflow_label: "Schema",
-              records: "5",
+              records: "1,500 total / 1,000 per table",
               created_on: "Sep 11, 2026 12:00 AM",
+              updated_on: "Sep 11, 2026 12:00 AM",
               status: "completed",
               validation: "Passed",
               transfer: "Not attempted",
+              run_count: 1,
               latest_run_id: "run-1",
               latest_result_id: "result-1"
             }
@@ -375,7 +492,7 @@ describe("Synthetic Data Twin routed app", () => {
 
     expect(screen.getByRole("heading", { name: "Synthetic Data Platform" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Home/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /My Twin/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /My Twins/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^Templates$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^Settings$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Workflow readiness notes/i })).not.toBeInTheDocument();
@@ -394,9 +511,7 @@ describe("Synthetic Data Twin routed app", () => {
     await user.upload(screen.getByLabelText(/Attach SQL/i), new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" }));
     await user.click(screen.getByTitle("Send"));
 
-    await waitFor(() => expect(window.location.pathname).toBe("/document"));
-    expect(await screen.findByText(/Started from chat request/i)).toBeInTheDocument();
-    expect(screen.getByText(/report.pdf/i)).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/document-job-1"));
   });
 
   test("home page routes low-confidence decisions to the selected workflow without alternatives", async () => {
@@ -407,9 +522,37 @@ describe("Synthetic Data Twin routed app", () => {
     await user.upload(screen.getByLabelText(/Attach SQL/i), new File(["id,name\n1,Ada"], "data.csv", { type: "text/csv" }));
     await user.click(screen.getByTitle("Send"));
 
-    await waitFor(() => expect(window.location.pathname).toBe("/schema"));
-    expect(await screen.findByText(/Started from chat request/i)).toBeInTheDocument();
-    expect(screen.getByText(/data.csv/i)).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/job-1"));
+  });
+
+  test("home page applies supported prompt options to schema generation", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.type(screen.getByLabelText("Workflow request"), "generate 1000 data as parquet for indian locale seed 77");
+    await user.upload(screen.getByLabelText(/Attach SQL/i), new File(['{"tables":{}}'], "schema.json", { type: "application/json" }));
+    await user.click(screen.getByTitle("Send"));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/job-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const generateCall = calls.find(([url]) => String(url) === "/api/schema/sessions/session-1/generate");
+    const body = JSON.parse(String(generateCall?.[1]?.body ?? "{}"));
+    expect(body).toMatchObject({ row_count: 1000, export_format: "parquet", locale: "en_IN", seed: 77 });
+  });
+
+  test("home page applies supported prompt options to interaction generation", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.type(screen.getByLabelText("Workflow request"), "generate customer chats as json with no redaction seed 77");
+    await user.upload(screen.getByLabelText(/Attach SQL/i), new File(["Customer: hello"], "support.log", { type: "text/plain" }));
+    await user.click(screen.getByTitle("Send"));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/interaction-job-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const configureCall = calls.find(([url]) => String(url) === "/api/interaction/sessions/interaction-session-1/configure");
+    const body = JSON.parse(String(configureCall?.[1]?.body ?? "{}"));
+    expect(body).toMatchObject({ output_format: "structured_json", remove_sensitive_information: false, seed: 77 });
   });
 
   test("home page passes attached file metadata to the intent request", async () => {
@@ -421,11 +564,53 @@ describe("Synthetic Data Twin routed app", () => {
     await user.click(screen.getByTitle("Send"));
 
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/intent/workflow")).toBe(true));
-    await waitFor(() => expect(window.location.pathname).toBe("/interaction"));
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/interaction-job-1"));
     const calls = vi.mocked(fetch).mock.calls;
     const intentCall = calls.find(([url]) => String(url) === "/api/intent/workflow");
     const body = JSON.parse(String(intentCall?.[1]?.body ?? "{}"));
     expect(body.attachments[0]).toMatchObject({ filename: "support.log", extension: ".log", content_type: "text/plain" });
+  });
+
+  test("home page starts a real sample database run when no file is attached", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.type(screen.getByLabelText("Workflow request"), "create a synthetic database demo with 1000 data");
+    await user.click(screen.getByTitle("Send"));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/database-job-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const sourceCall = calls.find(([url]) => String(url) === "/api/database/sessions/database-session-1/sample-source");
+    const sourceBody = JSON.parse(String(sourceCall?.[1]?.body ?? "{}"));
+    expect(sourceBody).toMatchObject({ customer_count: 1000, seed: 42 });
+    const configureCall = calls.find(([url]) => String(url) === "/api/database/sessions/database-session-1/configure");
+    const configureBody = JSON.parse(String(configureCall?.[1]?.body ?? "{}"));
+    expect(configureBody).toMatchObject({ target_record_count: 1000, sample_limit: 5000, seed: 42 });
+  });
+
+  test("schema page rejects SQLite database uploads", async () => {
+    const user = userEvent.setup();
+    renderApp("/schema");
+
+    fireEvent.change(await screen.findByLabelText("Schema file"), {
+      target: {
+        files: [new File(["sqlite"], "source.sqlite", { type: "application/x-sqlite3" })]
+      }
+    });
+
+    expect(await screen.findByText(/SQLite database files must use Database Twin/i)).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/schema/sessions/session-1/schema-file")).toBe(false);
+  });
+
+  test("home page blocks database files classified away from Database Twin", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.type(screen.getByLabelText("Workflow request"), "use this as a schema");
+    await user.upload(screen.getByLabelText(/Attach SQL/i), new File(["sqlite"], "source.sqlite", { type: "application/x-sqlite3" }));
+    await user.click(screen.getByTitle("Send"));
+
+    expect(await screen.findByText(/SQLite database files must use Database Twin/i)).toBeInTheDocument();
   });
 
   test("polls and renders a shared progress job", async () => {
@@ -442,6 +627,18 @@ describe("Synthetic Data Twin routed app", () => {
 
     expect(await screen.findByText("Generated Results")).toBeInTheDocument();
     expect(screen.getByText("user_id")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /users 1,000/i })).toBeInTheDocument();
+    expect(screen.getByText("Showing 1-20 of 25 preview rows (1,000 generated)")).toBeInTheDocument();
+    expect(screen.getByText("user-20")).toBeInTheDocument();
+    expect(screen.queryByText("user-21")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("Showing 21-25 of 25 preview rows (1,000 generated)")).toBeInTheDocument();
+    expect(screen.getByText("user-21")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /orders/i }));
+    expect(screen.getByText("order_id")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /orders 500/i })).toBeInTheDocument();
+    expect(screen.getByText("Showing 1-1 of 1 preview rows (500 generated)")).toBeInTheDocument();
+    expect(screen.queryByText("user_id")).not.toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "files" }));
     expect(screen.getByText("users.csv")).toBeInTheDocument();
     expect(screen.getByText("lineage.json")).toBeInTheDocument();
@@ -450,33 +647,40 @@ describe("Synthetic Data Twin routed app", () => {
     expect(URL.createObjectURL).toHaveBeenCalled();
   });
 
-  test("saves a result bundle to My Twin", async () => {
+  test("saves a result bundle to My Twins", async () => {
     const user = userEvent.setup();
     renderApp("/results/result-1");
 
     await screen.findByText("Generated Results");
-    await user.click(screen.getByRole("button", { name: /Save to My Twin/i }));
+    await user.click(screen.getByRole("button", { name: /Save to My Twins/i }));
 
-    expect(await screen.findByText(/Saved to My Twin/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Saved to My Twins/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /View twins/i })).toHaveAttribute("href", "/projects");
   });
 
-  test("renders real project data with a view action", async () => {
+  test("renders real project data with the name linked to durable project detail", async () => {
     renderApp("/projects");
 
     expect(await screen.findByText("Schema Twin Result")).toBeInTheDocument();
     expect(screen.getByText("Schema")).toBeInTheDocument();
+    expect(screen.getByText("Generated Rows")).toBeInTheDocument();
+    expect(screen.getByText("1,500 total / 1,000 per table")).toBeInTheDocument();
     expect(screen.getByText("Passed")).toBeInTheDocument();
-    expect(screen.getByTitle("View")).toHaveAttribute("href", "/projects/project-1");
+    expect(screen.getByRole("link", { name: /Schema Twin Result/i })).toHaveAttribute("href", "/projects/project-1");
+    expect(screen.queryByText("Open latest result")).not.toBeInTheDocument();
+    expect(screen.queryByText("Transfer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Actions")).not.toBeInTheDocument();
   });
 
   test("renders project detail with runs and artifacts", async () => {
     renderApp("/projects/project-1");
 
     expect(await screen.findByRole("heading", { name: "Schema Twin Result" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Latest Result/i })).toHaveAttribute("href", "/results/result-1");
-    expect(screen.getByText("run-1")).toBeInTheDocument();
-    expect(screen.getByTitle("View run")).toHaveAttribute("href", "/projects/project-1/runs/run-1");
+    expect(screen.getByText("My Twin")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Latest Result/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "run-1" })).toHaveAttribute("href", "/projects/project-1/runs/run-1");
+    expect(screen.getByRole("link", { name: /Open result/i })).toHaveAttribute("href", "/results/result-1");
+    expect(screen.queryByTitle("View run")).not.toBeInTheDocument();
     expect(screen.getByText("users.csv")).toBeInTheDocument();
   });
 
@@ -527,8 +731,61 @@ describe("Synthetic Data Twin routed app", () => {
   test("blocks workflow generation until a required upload exists", () => {
     renderApp("/database");
 
-    expect(screen.getByRole("button", { name: /generate/i })).toBeDisabled();
-    expect(screen.getByText(/SQLite upload is supported/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Generate Database Twin/i })).toBeDisabled();
+    expect(screen.getByText(/discover real tables/i)).toBeInTheDocument();
+  });
+
+  test("database page renders discovered SQLite summary after upload", async () => {
+    const user = userEvent.setup();
+    renderApp("/database");
+
+    const file = new File(["sqlite bytes"], "database_a.db", { type: "application/x-sqlite3" });
+    await user.upload(await screen.findByLabelText("SQLite database"), file);
+
+    expect(await screen.findByText("database_a.db")).toBeInTheDocument();
+    expect(screen.getByText("14")).toBeInTheDocument();
+    expect(screen.getAllByText("account").length).toBeGreaterThan(0);
+    expect(screen.getByText("4 rows")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Generate Database Twin/i })).toBeEnabled();
+  });
+
+  test("database page can generate a sample database source before generation", async () => {
+    const user = userEvent.setup();
+    renderApp("/database");
+
+    await user.click(screen.getByRole("button", { name: /Generate sample database/i }));
+    expect(await screen.findByText("Session ready: database-session-1")).toBeInTheDocument();
+    expect(screen.getAllByText("Tables").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: /Generate Database Twin/i }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/database-job-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.some(([url]) => String(url) === "/api/database/sessions/database-session-1/sample-source")).toBe(true);
+    expect(calls.some(([url]) => String(url) === "/api/database/sessions/database-session-1/generate")).toBe(true);
+    const configureCall = calls.find(([url]) => String(url) === "/api/database/sessions/database-session-1/configure");
+    expect(configureCall).toBeDefined();
+    expect(JSON.parse(String(configureCall?.[1]?.body))).toMatchObject({
+      preserve_source_counts: true,
+      sample_limit: 5000,
+      seed: 42
+    });
+  });
+
+  test("database page sends preserve-source count config when selected", async () => {
+    const user = userEvent.setup();
+    renderApp("/database");
+
+    await user.click(screen.getByRole("button", { name: /Generate sample database/i }));
+    await screen.findByText("Source rows");
+    await user.click(screen.getByRole("button", { name: "Preserve" }));
+    await user.click(screen.getByRole("button", { name: /Generate Database Twin/i }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/progress/database-job-1"));
+    const configureCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/database/sessions/database-session-1/configure");
+    expect(JSON.parse(String(configureCall?.[1]?.body))).toMatchObject({
+      preserve_source_counts: true
+    });
   });
 
   test("starts schema generation and navigates to the progress route", async () => {

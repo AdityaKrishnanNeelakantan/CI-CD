@@ -332,6 +332,7 @@ def generate_pii_columns(
             ContextFieldKind.POSTAL_CODE,
             ContextFieldKind.COUNTRY,
             ContextFieldKind.COMPANY,
+            ContextFieldKind.BRANCH_NAME,
             ContextFieldKind.PHONE,
             ContextFieldKind.UUID,
         }:

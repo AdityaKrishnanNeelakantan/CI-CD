@@ -205,12 +205,12 @@ with st.container(border=True):
     cfg1, cfg2, cfg3 = st.columns(3)
     with cfg1:
         row_count = st.number_input(
-            "Rows per table",
+            "Base rows",
             min_value=1,
             max_value=1_000_000,
             value=int(product_defaults["default_record_count"]),
             step=10,
-            help="Applied to each table in the schema.",
+            help="Used for root tables; related child tables are scaled from detected foreign keys.",
         )
     with cfg2:
         locale = st.selectbox(

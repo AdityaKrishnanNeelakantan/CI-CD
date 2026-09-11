@@ -27,6 +27,7 @@ from synth_platform.domain.product_settings import (
 )
 from synth_platform.engine.inference.schema.schema import Column, RealismConfig, Relationship, SchemaConfig, Table
 from synth_platform.engine.inference.schema.schema_columns import align_unique_int_ranges
+from synth_platform.engine.inference.schema.planning import GenerationPlanner
 from synth_platform.engine.inference.schema.yaml_schema import load_yaml_schema
 
 SchemaPayload = Union[Mapping[str, Any], bytes, str, Path, SchemaConfig]
@@ -465,24 +466,56 @@ def prepare_schema_for_generation(
     locale: Optional[str] = None,
     llm_text_enabled: bool = False,
 ) -> SchemaConfig:
-    """Apply UI generation settings without changing generation algorithms."""
+    """Apply Schema Twin settings and materialize FK-aware table cardinalities."""
     from synth_platform.engine.inference.schema.semantic import enrich_schema_semantics
 
     prepared = enrich_schema_semantics(schema.model_copy(deep=True))
+    if not prepared.domain and _looks_like_banking_schema(prepared):
+        prepared.domain = "fintech"
     prepared.seed = int(seed)
     rows = max(1, int(row_count))
     for table in prepared.tables:
         table.row_count = rows
         if not (table.description or "").strip():
             table.description = _friendly_table_description(table.name)
-        align_unique_int_ranges(prepared.columns.get(table.name, []), rows)
     if locale:
         if prepared.realism is None:
             prepared.realism = RealismConfig()
         prepared.realism.locale = locale
+
+    # Schema inference already provides a relationship graph. Reuse the engine's
+    # established planner to turn the global setting into a base count for roots
+    # and proportional counts for children. Materialize the plan before entering
+    # the pipeline so validation/export expectations use the same counts.
+    if prepared.relationships:
+        if prepared.realism is None:
+            prepared.realism = RealismConfig()
+        prepared.realism.row_planning = "heuristic"
+        prepared.realism.row_planning_base_rows = rows
+        plan = GenerationPlanner(prepared).build()
+        for table in prepared.tables:
+            table.row_count = max(1, int(plan.row_count_for(table.name, rows)))
+        prepared.realism.row_planning = "off"
+
+    for table in prepared.tables:
+        align_unique_int_ranges(prepared.columns.get(table.name, []), int(table.row_count))
     if llm_text_enabled:
         prepared = apply_llm_text_flags(prepared, enabled=True)
     return prepared
+
+
+def _looks_like_banking_schema(schema: SchemaConfig) -> bool:
+    """Recognize the concrete banking constellation used by Schema Twin."""
+    table_names = {table.name.lower() for table in schema.tables}
+
+    def contains(concept: str) -> bool:
+        return concept in table_names or f"{concept}s" in table_names
+
+    return (
+        contains("account")
+        and contains("transaction")
+        and any(contains(concept) for concept in ("customer", "branch", "card", "loan", "merchant"))
+    )
 
 
 def generate_from_schema(

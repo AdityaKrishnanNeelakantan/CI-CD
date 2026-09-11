@@ -55,7 +55,6 @@ from synth_platform.application.workflows.database_twin import (
     load_relational_generation_report,
     load_target_write_report,
     load_training_report,
-    recommend_synthesizer,
     run_artifact_export,
     run_contract_approval,
     run_discovery,
@@ -93,9 +92,6 @@ defaults = {
     "db_profile": None,
     "db_candidates": None,
     "db_contract": None,
-    "db_model_type": "safe_gaussian_copula",
-    "db_dp_epsilon": 3.0,
-    "db_dp_bounds": {},
     "db_training_report": None,
     "db_artifact_path": None,
     "db_source_disconnected": False,
@@ -543,15 +539,6 @@ if st.session_state.db_contract is None:
 
 contract = st.session_state.db_contract
 
-# ---------------------------------------------------------------------------
-# Step 5 - Learning plan / Step 6 - Train
-# ---------------------------------------------------------------------------
-_bounded_columns: dict[str, list[str]] = {}
-for table_name, table_contract in contract["tables"].items():
-    for col_name, col in table_contract["columns"].items():
-        if col["inference_status"] == "approved" and col["semantic_type"] in ("numerical", "datetime"):
-            _bounded_columns.setdefault(table_name, []).append(col_name)
-
 with st.container(border=True):
     step_header(6, "Train twin", st.session_state.db_training_report is not None)
     step_guide(
@@ -560,60 +547,13 @@ with st.container(border=True):
     )
 
     if st.session_state.db_training_report is None:
-        _labels_by_model_type = {
-            "safe_gaussian_copula": "Standard twin (fidelity-focused)",
-            "dp_gaussian_copula": "Twin with differential privacy",
-        }
-        _labels = list(_labels_by_model_type.values())
-        recommendation = recommend_synthesizer(contract)
-        st.info(
-            f"Recommended: **{_labels_by_model_type[recommendation['recommended_model_type']]}** "
-            f"- {recommendation['reasons'][0]}",
-            icon=":material/lightbulb:",
-        )
-        model_label = st.selectbox(
-            "Twin type",
-            _labels,
-            index=_labels.index(_labels_by_model_type[recommendation["recommended_model_type"]]),
-            help="Both produce a portable trained twin. Recommendation is advisory.",
-        )
-        st.session_state.db_model_type = (
-            "dp_gaussian_copula" if "differential privacy" in model_label else "safe_gaussian_copula"
-        )
-        with st.expander("Technical details — twin type", expanded=False):
-            st.caption(
-                "Models are pickle-free JSON artifacts (Gaussian-copula family). "
-                "Differential privacy adds calibrated noise when selected."
-            )
-
         model_kwargs: dict = {"category_minimum_support": 5}
-        if st.session_state.db_model_type == "dp_gaussian_copula":
-            st.session_state.db_dp_epsilon = st.slider(
-                "Privacy budget (epsilon) - smaller = stronger privacy, more noise", 0.1, 10.0,
-                st.session_state.db_dp_epsilon,
-            )
-            st.caption("Numeric/datetime column bounds - public domain knowledge, never derived from the data itself.")
-            bounds: dict[str, tuple] = {}
-            for table_name, cols in _bounded_columns.items():
-                for col_name in cols:
-                    is_datetime = contract["tables"][table_name]["columns"][col_name]["semantic_type"] == "datetime"
-                    c1, c2 = st.columns(2)
-                    if is_datetime:
-                        lower = c1.date_input(f"{table_name}.{col_name} - earliest", key=f"lb_{table_name}_{col_name}")
-                        upper = c2.date_input(f"{table_name}.{col_name} - latest", key=f"ub_{table_name}_{col_name}")
-                        bounds[col_name] = (str(lower), str(upper))
-                    else:
-                        lower = c1.number_input(f"{table_name}.{col_name} - lower bound", value=0.0, key=f"lb_{table_name}_{col_name}")
-                        upper = c2.number_input(f"{table_name}.{col_name} - upper bound", value=1_000_000.0, key=f"ub_{table_name}_{col_name}")
-                        bounds[col_name] = (lower, upper)
-            model_kwargs["epsilon_budget"] = st.session_state.db_dp_epsilon
-            model_kwargs["column_bounds"] = bounds
 
         if st.button("Train", icon=":material/model_training:"):
             manifest = _manifest_for_new_outputs("training_report.json")
             result = run_training_and_sampling(
                 source_adapter, contract, manifest, "dataset_contract.json", sample_limit=5000,
-                num_rows_to_generate=5, seed=1, model_type=st.session_state.db_model_type, model_kwargs=model_kwargs,
+                num_rows_to_generate=5, seed=1, model_type="safe_gaussian_copula", model_kwargs=model_kwargs,
             )
             if not result.is_success():
                 show_user_error(

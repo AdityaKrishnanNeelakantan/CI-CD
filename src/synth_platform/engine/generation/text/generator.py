@@ -21,6 +21,7 @@ from synth_platform.engine.generation.text.prompts import build_system_message, 
 from synth_platform.engine.generation.text.validators import sanitize_text, validate_generated_text
 from synth_platform.engine.generation.text.vocabulary import get_domain_vocabulary
 from synth_platform.domain.privacy.llm_policy import LlmPolicy, LlmPolicyError
+from synth_platform.settings import Settings
 
 DEFAULT_MAX_LLM_ROWS = 50
 DEFAULT_BATCH_SIZE = 25
@@ -274,8 +275,9 @@ class TextGenerationEngine:
     ) -> List[str]:
         provider = LlmPolicy.from_environment().require_provider(self.config.provider).provider
         if provider in {"ollama", "local"}:
-            model = self.config.model or os.getenv("OLLAMA_LLM_TEXT_MODEL") or os.getenv("MVP_LLM_TEXT_MODEL") or "qwen3:8b"
-            host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            settings = Settings.from_env()
+            model = self.config.model or settings.ollama_model
+            host = settings.ollama_host
             prompt = build_text_generation_prompt(
                 table_name=table_name,
                 column_name=column_name,

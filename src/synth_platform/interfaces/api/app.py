@@ -1,4 +1,4 @@
-"""FastAPI application for the local API migration proof-of-concept."""
+"""FastAPI application for Synthetic Data Twin."""
 
 from __future__ import annotations
 

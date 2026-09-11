@@ -39,7 +39,6 @@ class DatabaseConfigureRequest(BaseModel):
     row_counts_by_table: dict[str, int] | None = None
     sample_limit: int = 100
     seed: int = 11
-    model_type: str = "safe_gaussian_copula"
 
 
 @router.post("/sessions", status_code=201)
@@ -161,7 +160,7 @@ def _run_database_job(job_id: str) -> None:
             sample_limit=int(config_state.get("sample_limit") or 100),
             num_rows_to_generate=int(config_state.get("row_count") or 10),
             seed=int(config_state.get("seed") or 11),
-            model_type=str(config_state.get("model_type") or "safe_gaussian_copula"),
+            model_type="safe_gaussian_copula",
         )
         store.advance_job(job_id, stage="generating_synthetic_data", percent=55, message="Generating synthetic data")
         context = run_database_twin_pipeline(adapter, manifest, pipeline_config, history=PlatformDB())
@@ -266,4 +265,3 @@ def _read_json_if_exists(path: Path) -> dict[str, Any]:
 
     data = json.loads(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
-

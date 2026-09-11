@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Any
 from pathlib import Path
 
 from synth_platform.domain.privacy.llm_policy import LlmPolicy, LlmPolicyError
+from synth_platform.settings import Settings
 
 
 def _rng_int(rng: Any, low: int, high: int) -> int:
@@ -740,9 +741,10 @@ class SmartValueGenerator:
                 except ImportError:
                     return None
             elif self.provider in {"ollama", "local"}:
+                settings = Settings.from_env()
                 self._client = _OllamaValueClient(
-                    model=os.getenv("OLLAMA_SMART_VALUE_MODEL", os.getenv("MVP_LLM_TEXT_MODEL", "qwen3:8b")),
-                    host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+                    model=settings.ollama_model,
+                    host=settings.ollama_host,
                 )
         return self._client
     

@@ -1,4 +1,4 @@
-"""Shared local job runner for the FastAPI migration surface."""
+"""Shared local job runner for API workflows."""
 
 from __future__ import annotations
 

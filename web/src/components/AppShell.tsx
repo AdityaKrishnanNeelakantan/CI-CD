@@ -1,12 +1,9 @@
 import {
-  BookOpen,
+  DatabaseZap,
   FolderKanban,
   HelpCircle,
   Home,
-  LayoutTemplate,
   LockKeyhole,
-  Settings,
-  ShieldCheck,
   UserCircle
 } from "lucide-react";
 import { PropsWithChildren } from "react";
@@ -15,10 +12,8 @@ import { workflows } from "../lib/workflows";
 
 const navItems = [
   { to: "/", label: "Home", Icon: Home },
-  { to: "/projects", label: "My Projects", Icon: FolderKanban },
-  { to: "/templates", label: "Templates", Icon: LayoutTemplate },
-  { to: "/help", label: "Help & Guides", Icon: HelpCircle },
-  { to: "/settings", label: "Settings", Icon: Settings }
+  { to: "/projects", label: "My Twin", Icon: FolderKanban },
+  { to: "/help", label: "Help & Guides", Icon: HelpCircle }
 ];
 
 export function AppShell({ children }: PropsWithChildren) {
@@ -27,11 +22,10 @@ export function AppShell({ children }: PropsWithChildren) {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <ShieldCheck size={22} />
+            <DatabaseZap size={22} />
           </div>
           <div>
-            <strong>Synthetic Data Twin</strong>
-            <span>Local workspace</span>
+            <strong>Synthetic Data Platform</strong>
           </div>
         </div>
         <nav aria-label="Primary navigation" className="side-nav">
@@ -58,16 +52,11 @@ export function AppShell({ children }: PropsWithChildren) {
             ))}
           </nav>
         </div>
-        <Link className="guide-link" to="/help">
-          <BookOpen size={17} />
-          Workflow readiness notes
-        </Link>
       </aside>
       <div className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Synth Platform</p>
-            <h1>Synthetic Data Twin</h1>
+            <h1>Synthetic Data Platform</h1>
           </div>
           <div className="top-actions">
             <div className="service-pill">

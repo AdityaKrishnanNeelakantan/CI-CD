@@ -15,8 +15,7 @@ def run() -> None:
 
     pages_dir = Path(__file__).resolve().parent / "pages"
     home = st.Page(str(pages_dir / "home.py"), title="Home", icon=":material/home:", default=True)
-    my_projects = st.Page(str(pages_dir / "my_projects.py"), title="My Projects", icon=":material/folder:")
-    settings = st.Page(str(pages_dir / "settings.py"), title="Settings", icon=":material/settings:")
+    my_projects = st.Page(str(pages_dir / "my_projects.py"), title="My Twin", icon=":material/folder:")
     schema = st.Page(str(pages_dir / "schema_twin.py"), title="Schema Mode", icon=":material/schema:")
     database = st.Page(str(pages_dir / "database_twin.py"), title="Database Twin", icon=":material/database:")
     pdf = st.Page(str(pages_dir / "pdf_twin.py"), title="PDF Twin", icon=":material/description:")
@@ -28,7 +27,7 @@ def run() -> None:
 
     page = st.navigation(
         {
-            "Platform": [home, my_projects, settings],
+            "Platform": [home, my_projects],
             "Create": [schema, database, pdf, interaction],
         },
         position="sidebar",

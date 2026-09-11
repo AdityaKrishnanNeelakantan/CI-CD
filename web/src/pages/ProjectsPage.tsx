@@ -10,8 +10,8 @@ export function ProjectsPage() {
     <section className="panel wide">
       <div className="results-header">
         <div>
-          <p className="eyebrow">My Projects</p>
-          <h2>Generated Projects</h2>
+          <p className="eyebrow">My Twin</p>
+          <h2>Generated Twins</h2>
         </div>
         <Link className="primary" to="/">
           <Plus size={17} />

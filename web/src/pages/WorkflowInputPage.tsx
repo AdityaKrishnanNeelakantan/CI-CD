@@ -36,7 +36,6 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
   const [rowCountsByTable, setRowCountsByTable] = useState<Record<string, number>>({});
   const [sampleLimit, setSampleLimit] = useState(100);
   const [seed, setSeed] = useState(42);
-  const [modelType, setModelType] = useState("safe_gaussian_copula");
   const [extractionMethod, setExtractionMethod] = useState("auto");
   const [llmTextEnabled, setLlmTextEnabled] = useState(false);
   const [interactionType, setInteractionType] = useState("support_chat");
@@ -79,8 +78,7 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
           row_count: rowCount,
           row_counts_by_table: Object.keys(rowCountsByTable).length ? rowCountsByTable : undefined,
           sample_limit: sampleLimit,
-          seed,
-          model_type: modelType
+          seed
         });
         return startDatabaseGeneration(currentSession.id);
       }
@@ -104,8 +102,7 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
     onError: (err) => setError(messageForError(err))
   });
 
-  const uploadLabel =
-    workflow.key === "database" ? "Database or sample file" : workflow.key === "document" ? "PDF document" : "Transcript file";
+  const uploadLabel = workflow.key === "database" ? "SQLite database" : workflow.key === "document" ? "PDF document" : "Transcript file";
   const tables = sourceTables(session);
   const document = session?.state.document as Record<string, unknown> | undefined;
   const transcript = session?.state.transcript as Record<string, unknown> | undefined;
@@ -143,11 +140,11 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
           {workflow.key === "database" ? (
             <label>
               Connection details
-              <textarea disabled placeholder="PostgreSQL connections are coming soon" value={connection} onChange={(event) => setConnection(event.target.value)} />
+              <textarea disabled placeholder="Use SQLite upload for this workflow" value={connection} onChange={(event) => setConnection(event.target.value)} />
             </label>
           ) : null}
           <UploadPanel accept={acceptForWorkflow(workflow.key)} busy={uploadMutation.isPending} label={uploadLabel} onFile={(file) => uploadMutation.mutate(file)} />
-          {workflow.key === "database" ? <div className="empty">SQLite upload is supported. CSV, Parquet, and PostgreSQL are coming soon.</div> : null}
+          {workflow.key === "database" ? <div className="empty">SQLite upload is supported for this workflow.</div> : null}
           {tables.length ? (
             <div className="summary-grid">
               <Metric label="Tables" value={tables.length} />
@@ -186,12 +183,6 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
                 <label>
                   Sample limit
                   <input min={1} type="number" value={sampleLimit} onChange={(event) => setSampleLimit(Number(event.target.value))} />
-                </label>
-                <label>
-                  Model
-                  <select value={modelType} onChange={(event) => setModelType(event.target.value)}>
-                    <option value="safe_gaussian_copula">Safe Gaussian copula</option>
-                  </select>
                 </label>
               </div>
               {tables.length ? (
@@ -250,7 +241,7 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
                 <input checked={removeSensitive} type="checkbox" onChange={(event) => setRemoveSensitive(event.target.checked)} />
                 <span>Remove sensitive information</span>
               </label>
-              <div className="empty">Conversation count and message count controls are coming soon.</div>
+              <div className="empty">Conversation and message counts are controlled automatically.</div>
             </>
           ) : null}
           <button className="primary" disabled={!uploaded || generateMutation.isPending} onClick={() => generateMutation.mutate()}>
@@ -270,7 +261,7 @@ async function createSession(key: WorkflowConfig["key"], intent: string): Promis
 }
 
 function acceptForWorkflow(key: WorkflowConfig["key"]) {
-  if (key === "database") return ".sqlite,.db";
+  if (key === "database") return ".sqlite,.sqlite3,.db";
   if (key === "document") return ".pdf";
   return ".txt,.log";
 }
@@ -303,7 +294,7 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 
 function validateUpload(key: WorkflowConfig["key"], file: File) {
   const name = file.name.toLowerCase();
-  if (key === "database" && !name.endsWith(".sqlite") && !name.endsWith(".db")) {
+  if (key === "database" && !name.endsWith(".sqlite") && !name.endsWith(".sqlite3") && !name.endsWith(".db")) {
     throw new Error("Database Twin currently supports SQLite uploads only.");
   }
   if (key === "document" && !name.endsWith(".pdf") && file.type !== "application/pdf") {

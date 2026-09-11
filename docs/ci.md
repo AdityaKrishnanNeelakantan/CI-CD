@@ -1,9 +1,7 @@
-# CI/CD Phase 1, 2A, 2B, and 3
+# CI/CD
 
-Phase 1 stabilizes the project as an installable Python package and makes CI
-truthful about which layer failed. Phase 2A adds package build verification.
-Phase 2B adds portable twin artifact delivery verification. Deployment is
-intentionally out of scope. Phase 3 adds tag-based GitHub Release automation.
+The project keeps backend, frontend, packaging, artifact, and release checks
+separate so failures point to the layer that needs attention.
 
 ## Local Commands
 
@@ -112,6 +110,6 @@ twin delivery, creates checksums, and publishes a GitHub Release.
 
 ## Current Boundaries
 
-These phases do not deploy Streamlit, publish packages, build Docker images,
-or create an artifact registry. Those belong to later phases after the package
-and CI quality gates are stable.
+CI verifies tests, package builds, frontend builds, Docker image builds, and
+release artifacts. Publishing to a package registry, container registry, or
+deployment target requires project-specific credentials and ownership decisions.

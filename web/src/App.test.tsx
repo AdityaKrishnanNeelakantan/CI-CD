@@ -334,9 +334,12 @@ describe("Synthetic Data Twin routed app", () => {
   test("renders the shell navigation and home workflow cards", () => {
     renderApp();
 
-    expect(screen.getByRole("heading", { name: "Synthetic Data Twin" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Synthetic Data Platform" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Home/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /My Projects/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /My Twin/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Templates$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Settings$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Workflow readiness notes/i })).not.toBeInTheDocument();
     expect(screen.getByText("Air-Gapped Mode")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Schema Twin/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Database Twin/i })).toBeInTheDocument();
@@ -366,15 +369,15 @@ describe("Synthetic Data Twin routed app", () => {
     expect(URL.createObjectURL).toHaveBeenCalled();
   });
 
-  test("saves a result bundle to My Projects", async () => {
+  test("saves a result bundle to My Twin", async () => {
     const user = userEvent.setup();
     renderApp("/results/result-1");
 
     await screen.findByText("Generated Results");
-    await user.click(screen.getByRole("button", { name: /Save to My Projects/i }));
+    await user.click(screen.getByRole("button", { name: /Save to My Twin/i }));
 
-    expect(await screen.findByText(/Saved to My Projects/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /View projects/i })).toHaveAttribute("href", "/projects");
+    expect(await screen.findByText(/Saved to My Twin/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /View twins/i })).toHaveAttribute("href", "/projects");
   });
 
   test("renders real project data with a view action", async () => {
@@ -410,7 +413,7 @@ describe("Synthetic Data Twin routed app", () => {
 
     expect(await screen.findByText("E-commerce Platform")).toBeInTheDocument();
     expect(screen.getByText("Support Transcript")).toBeInTheDocument();
-    expect(screen.getByText("Coming soon")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
   test("renders template detail and starts template-backed schema flow", async () => {

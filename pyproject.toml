@@ -32,6 +32,10 @@ dependencies = [
 [project.optional-dependencies]
 api = [
   "fastapi>=0.110",
+  "sdv>=1.37.4",
+  "copulas>=0.12",
+  "fpdf2>=2.8.7",
+  "langdetect>=1.0.9",
   "python-multipart>=0.0.9",
   "uvicorn>=0.29"
 ]

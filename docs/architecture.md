@@ -4,7 +4,9 @@
 
 This repository uses a single canonical package, `synth_platform`, for all four implemented user-facing workflows. The architecture separates **what the product does** (workflows/use cases/domain) from **how it talks to external systems** (infrastructure) and **how users invoke it** (interfaces).
 
-The default Streamlit entry point is a unified Chat page backed by a thin, deterministic capability coordinator. The coordinator routes to Schema, Database, Document/PDF, or Customer Interaction Twin; it does not reproduce their generation, extraction, training, validation, privacy, or packaging logic.
+The default Streamlit entry point is a unified Home/Chat page backed by a thin, deterministic capability coordinator. The coordinator routes to Schema, Database, Document/PDF, or Customer Interaction Twin; it does not reproduce their generation, extraction, training, validation, privacy, or packaging logic.
+
+A separate shared product workspace surrounds those workflows with local sessions, specialized progress events, normalized result views, projects, real Schema templates, safe preferences, and artifact metadata. It is an application service backed by repository ports and atomic local adapters; it is not part of the coordinator and does not execute workflow stages.
 
 The larger cross-domain target architecture also includes a separate live-agent plane, MCP tool gateway, shared governance/evaluation, and internal model platform. Those are transition targets rather than current runtime components. See `unified-chat-transition.md` for phase boundaries.
 
@@ -17,6 +19,8 @@ Entry points only: Streamlit, REST API, CLI, and SDK. Interface code translates 
 Coordinates product behavior.
 
 - `coordinator/` selects a registered product capability through protocol-independent contracts; it never executes workflow stages.
+- `services/workspace.py` manages safe workflow session/project/result/settings state around, not inside, specialized workflows.
+- `services/result_presentation.py` normalizes workflow-owned outcomes without replacing validation or release policy.
 - `workflows/` exposes one stable facade per implemented product workflow.
 - `use_cases/` exposes reusable application operations.
 - `orchestration/` owns stage sequencing, state, and checkpoint coordination after a workflow has been selected.
@@ -102,6 +106,47 @@ De-identification is an optional sibling operation after template construction; 
 → transcript parsing and sanitization → optional one-shot semantic enhancement → strict interaction SSOT → privacy/source-replay validation → checksummed ZIP packaging.
 
 Raw source text is kept in memory only. The model, when enabled, receives only sanitized text and may return closed-vocabulary semantic labels; malformed, invalid, or unavailable model output falls back deterministically. The released package contains only `sanitized_source.txt`, `interaction_ssot.json`, `validation_report.json`, and `manifest.json`.
+
+## Shared product workspace
+
+The canonical shell exposes Home/Chat, My Projects, Results, Templates, Help & Guides, Settings, and direct specialized workflow navigation. Shared wizard macro-steps and result cards are presentation contracts only; internal Database, PDF, Schema, and Interaction substages remain authoritative.
+
+`application/dto/workspace.py` defines safe session, progress, result, project, template, preference, artifact, and lineage views. Repository protocols live in `application/ports/workspace_repositories.py`; `infrastructure/persistence/local_workspace.py` implements them with atomic local JSON writes, a recoverable completion journal, process locking, immutable content-addressed artifact snapshots, and verified reads. `bootstrap.build_workspace_service()` is the composition root. The default root is `<SP_OUTPUT_ROOT>/workspace`; original SQLite/PDF inputs remain in process-temporary staging rather than that durable root.
+
+Execution status, validation status, and release verdict are intentionally separate. A successful `StageResult` records execution only. Shared presentation consumes existing validation reports and release decisions rather than recreating their policy.
+
+Workspace records omit raw source payloads and credentials. Original SQLite/PDF inputs use permission-restricted process-temporary staging, explicit disconnect/completion cleanup, process-exit cleanup, and a 24-hour stale sweep; in particular, raw interaction transcript text stays in Streamlit memory and never enters session/project/result JSON. Only content-addressed synthetic or sanitized outputs are cataloged for shared downloads.
+
+The installed Streamlit launcher binds to `127.0.0.1`. The workspace is therefore supported as single-user localhost functionality until authentication and tenant authorization are implemented.
+
+See `shared-product-workspace.md` for contracts and screen mapping.
+
+## Guardrail boundaries
+
+Guardrails wrap existing boundaries rather than introducing an execution agent.
+Home/Chat applies deterministic sensitive-data masking plus injection, scope,
+and conservative content checks before retaining/routing user input. The
+coordinator remains a pure capability selector.
+
+Specialized model calls use the `ChatModel` port through
+`infrastructure/llm/guarded_chat.py`: input is masked and policy-checked before a
+loopback-only Ollama call; output is bounded, schema/JSON checked, rescanned for
+sensitive data and content, then returned to workflow-owned grounding,
+validation, and release gates. Customer Interaction only admits semantic labels
+supported by deterministic transcript evidence. Schema-guided extraction drops
+values without source evidence. Synthetic text engines accept an injected
+guarded model or fall back deterministically; they no longer construct hosted
+provider clients directly.
+
+Workspace-like tool operations cross `GuardedWorkspaceTools`, which accepts only
+strict Pydantic commands and applies a default-deny local resource/operation
+policy before calling `WorkspaceService`. Artifact reads prove session ownership
+and delete requires a separately granted capability plus explicit confirmation.
+This is local operation enforcement, not authenticated RBAC. A future MCP adapter
+may sit outside this service but may not bypass it or enter the coordinator.
+
+See `guardrails.md` for policy details and stated deterministic-check
+limitations.
 
 ## Run artifacts and lineage
 

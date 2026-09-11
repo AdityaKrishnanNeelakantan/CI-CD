@@ -5,12 +5,13 @@ Presentation only - no generation, training, or validation algorithms.
 
 from __future__ import annotations
 
+import re
 import time
 import tracemalloc
-import re
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -404,9 +405,14 @@ def apply_llm_free_text_to_tables(
     max_llm_rows: int = 50,
 ) -> list[dict[str, Any]]:
     """Post-pass: regenerate free_text CSV columns via TextGenerationEngine (no source text)."""
+    from synth_platform.bootstrap import build_guarded_chat_model
+    from synth_platform.engine.generation.text import (
+        TextGenerationConfig,
+        generate_text_column,
+    )
     from synth_platform.engine.inference.schema.schema import Column
-    from synth_platform.engine.generation.text import TextGenerationConfig, generate_text_column
 
+    guarded_model = build_guarded_chat_model("synthetic_text")
     evidence_rows: list[dict[str, Any]] = []
     by_table: dict[str, list[str]] = {}
     for item in free_text_columns:
@@ -445,6 +451,7 @@ def apply_llm_free_text_to_tables(
                     seed=seed,
                 ),
                 source_series=None,
+                model=guarded_model,
             )
             df[col_name] = result.values
             changed = True

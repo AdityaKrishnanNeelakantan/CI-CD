@@ -26,6 +26,52 @@ application/workflows/pdf_twin.py
 application/workflows/schema_twin.py
 ```
 
+## Shared application workspace
+
+```text
+application/dto/workspace.py
+application/ports/workspace_repositories.py
+application/services/__init__.py
+application/services/result_presentation.py
+application/services/workspace.py
+infrastructure/persistence/local_workspace.py
+infrastructure/storage/source_staging.py
+interfaces/streamlit/workspace.py
+interfaces/streamlit/pages/projects.py
+interfaces/streamlit/pages/results.py
+interfaces/streamlit/pages/templates.py
+interfaces/streamlit/pages/settings_page.py
+interfaces/streamlit/pages/help.py
+```
+
+These files implement the shared session/progress/result/project/template/settings layer. The application service does not call workflow engines; specialized pages execute their existing facades and then publish safe presentation metadata. Local JSON writes are atomic, artifact paths must resolve below approved roots, and raw transcript/source credentials are excluded from workspace contracts.
+
+## Guardrail boundaries
+
+```text
+domain/guardrails/__init__.py
+domain/guardrails/models.py
+application/dto/tool_commands.py
+application/ports/guardrails.py
+application/services/tool_gateway.py
+engine/security/__init__.py
+engine/security/text_guardrails.py
+infrastructure/llm/guarded_chat.py
+infrastructure/llm/ollama_chat.py
+```
+
+Input/output guardrails provide source-free category/count reports, sensitive
+value masking, prompt-injection/scope/content checks, bounded JSON output checks,
+and workflow-specific grounding. `GuardedChatModel` decorates the existing
+model port; Ollama is restricted to loopback origins. Active text generation
+requires explicit guarded-model injection; active Schema smart-value composition
+disables the legacy helper's hosted providers and uses curated local fallback.
+
+Tool commands forbid unknown fields and constrain IDs/text. The guarded
+workspace facade checks local read/write/update/delete permission before calling
+`WorkspaceService`; artifact/session ownership is verified and delete is denied
+by default. This is not an MCP implementation and does not enter the coordinator.
+
 ## Application use cases
 
 **21 Python files**

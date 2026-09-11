@@ -6,11 +6,31 @@ and present preview / validation / download. No generation algorithms here.
 
 from __future__ import annotations
 
-import tempfile
+import hashlib
+import json
 from pathlib import Path
 
 import streamlit as st
 
+from synth_platform.application.dto.tool_commands import (
+    CompleteSessionCommand,
+    GetResultCommand,
+    ReadPreferencesCommand,
+    StartSessionCommand,
+)
+from synth_platform.application.dto.workspace import ProgressStatus, WorkflowKind
+from synth_platform.application.services.result_presentation import schema_result_view
+from synth_platform.application.workflows.schema_twin import (
+    generate_from_schema,
+    list_llm_text_columns,
+    load_schema,
+    load_schema_bytes,
+    package_download,
+    schema_column_details,
+    summarize_schema,
+    validation_highlights,
+)
+from synth_platform.bootstrap import build_guarded_chat_model
 from synth_platform.interfaces.streamlit.components.common.ux import (
     measure_generation,
     mode_outcomes,
@@ -25,14 +45,15 @@ from synth_platform.interfaces.streamlit.components.common.ux import (
     step_guide,
     step_header,
 )
-from synth_platform.application.workflows.schema_twin import (
-    generate_from_schema,
-    list_llm_text_columns,
-    load_schema_bytes,
-    package_download,
-    schema_column_details,
-    summarize_schema,
-    validation_highlights,
+from synth_platform.interfaces.streamlit.workspace import (
+    ensure_workflow_session,
+    fingerprint_configuration,
+    get_workspace_tools,
+    record_progress_once,
+    render_backend_progress,
+    render_project_save,
+    render_result_summary,
+    workflow_run_dir,
 )
 
 st.title("Schema Mode")
@@ -52,12 +73,16 @@ defaults = {
     "schema_zip_bytes": None,
     "schema_run_metrics": None,
     "schema_llm_text": False,
+    "schema_workspace_session_id": None,
+    "schema_configuration_hash": None,
+    "schema_result_view_id": None,
+    "schema_template_definition": None,
+    "schema_template_id": None,
 }
 for key, value in defaults.items():
     st.session_state.setdefault(key, value)
-
-if st.session_state.schema_workdir is None:
-    st.session_state.schema_workdir = Path(tempfile.mkdtemp(prefix="schema_twin_"))
+workspace_tools = get_workspace_tools()
+preferences = workspace_tools.get_preferences(ReadPreferencesCommand())
 
 
 def _progress_steps() -> list[tuple[str, bool]]:
@@ -80,6 +105,7 @@ def _reset_generation() -> None:
     st.session_state.schema_result = None
     st.session_state.schema_zip_bytes = None
     st.session_state.schema_run_metrics = None
+    st.session_state.schema_result_view_id = None
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +138,15 @@ with st.container(border=True):
 # ---------------------------------------------------------------------------
 # 2. Provide schema
 # ---------------------------------------------------------------------------
+if st.session_state.schema_config is None and st.session_state.schema_template_definition:
+    template_payload = st.session_state.schema_template_definition
+    schema = load_schema(template_payload)
+    template_bytes = json.dumps(template_payload, sort_keys=True).encode("utf-8")
+    source_hash = hashlib.sha256(template_bytes).hexdigest()
+    st.session_state.schema_config = schema
+    st.session_state.schema_summary = summarize_schema(schema)
+    st.session_state.schema_file_id = source_hash
+
 with st.container(border=True):
     step_header(2, "Provide schema", st.session_state.schema_config is not None)
     step_guide(
@@ -124,13 +159,16 @@ with st.container(border=True):
         help="JSON, YAML, or SQL DDL.",
     )
     if uploaded is not None:
-        file_id = f"{uploaded.name}:{uploaded.size}"
+        uploaded_bytes = uploaded.getvalue()
+        file_id = hashlib.sha256(uploaded_bytes).hexdigest()
         if file_id != st.session_state.schema_file_id:
             try:
-                schema = load_schema_bytes(uploaded.getvalue(), uploaded.name)
+                schema = load_schema_bytes(uploaded_bytes, uploaded.name)
                 st.session_state.schema_config = schema
                 st.session_state.schema_summary = summarize_schema(schema)
                 st.session_state.schema_file_id = file_id
+                st.session_state.schema_template_definition = None
+                st.session_state.schema_template_id = None
                 _reset_generation()
             except Exception as exc:
                 st.session_state.schema_config = None
@@ -202,7 +240,7 @@ with st.container(border=True):
             "Rows per table",
             min_value=1,
             max_value=1_000_000,
-            value=100,
+            value=preferences.default_row_count,
             step=10,
             help="Applied to each table in the schema.",
         )
@@ -210,7 +248,14 @@ with st.container(border=True):
         locale = st.selectbox(
             "Locale",
             options=["en_US", "en_GB", "en_IN", "de_DE", "fr_FR"],
-            index=0,
+            index=(
+                ["en_US", "en_GB", "en_IN", "de_DE", "fr_FR"].index(
+                    preferences.locale
+                )
+                if preferences.locale
+                in ["en_US", "en_GB", "en_IN", "de_DE", "fr_FR"]
+                else 0
+            ),
             help="Locale-aware synthetic values where supported by the generator.",
         )
     with cfg3:
@@ -221,7 +266,11 @@ with st.container(border=True):
             value=42,
             help="Same seed reproduces the same synthetic output.",
         )
-    export_format = st.selectbox("Export format", options=["csv", "parquet"], index=0)
+    export_format = st.selectbox(
+        "Export format",
+        options=["csv", "parquet"],
+        index=["csv", "parquet"].index(preferences.default_export_format),
+    )
 
     llm_cols = list_llm_text_columns(schema)
     st.markdown("**Text-heavy columns (optional LLM)**")
@@ -240,6 +289,42 @@ with st.container(border=True):
         st.session_state.schema_llm_text = False
         st.caption("No text-heavy columns detected in this schema — LLM option is hidden.")
 
+schema_configuration_hash = fingerprint_configuration(
+    {
+        "row_count": int(row_count),
+        "locale": locale,
+        "seed": int(seed),
+        "export_format": export_format,
+        "llm_text_enabled": bool(st.session_state.schema_llm_text),
+    }
+)
+if st.session_state.schema_configuration_hash not in {None, schema_configuration_hash}:
+    _reset_generation()
+st.session_state.schema_configuration_hash = schema_configuration_hash
+schema_session = ensure_workflow_session(
+    state_key="schema_workspace_session_id",
+    workflow=WorkflowKind.SCHEMA,
+    title="Schema Twin",
+    source_fingerprint=st.session_state.schema_file_id,
+    configuration_fingerprint=schema_configuration_hash,
+    current_step="review",
+)
+st.session_state.schema_workdir = workflow_run_dir(
+    schema_session.session_id, WorkflowKind.SCHEMA
+)
+for macro_step, stage_id, stage_label in (
+    ("input", "schema_input", "Provide schema"),
+    ("review", "schema_review", "Review schema"),
+    ("review", "generation_configuration", "Configure generation"),
+):
+    record_progress_once(
+        schema_session.session_id,
+        macro_step=macro_step,
+        stage_id=stage_id,
+        stage_label=stage_label,
+        status=ProgressStatus.SUCCEEDED,
+    )
+
 # ---------------------------------------------------------------------------
 # 5. Generate
 # ---------------------------------------------------------------------------
@@ -248,10 +333,26 @@ with st.container(border=True):
     step_guide(what="Create the synthetic relational dataset from the schema.", next_step="Preview and validate.")
     generate_clicked = st.button("Generate Synthetic Data", type="primary", width="stretch")
     if generate_clicked:
+        workspace_tools.start_session(
+            StartSessionCommand(session_id=schema_session.session_id)
+        )
+        record_progress_once(
+            schema_session.session_id,
+            macro_step="generate",
+            stage_id="generation",
+            stage_label="Generate synthetic data",
+            status=ProgressStatus.RUNNING,
+            message="Running the specialized Schema pipeline.",
+        )
         with st.status("Generating your synthetic dataset...", expanded=True) as status:
             try:
                 st.write("Reading schema...")
                 st.write("Preparing generation configuration...")
+                text_model = (
+                    build_guarded_chat_model("synthetic_text")
+                    if st.session_state.schema_llm_text
+                    else None
+                )
                 st.write("Running schema-driven pipeline...")
                 with measure_generation() as run_stats:
                     result = generate_from_schema(
@@ -263,9 +364,13 @@ with st.container(border=True):
                         export_format=export_format,
                         preview_rows=min(100, int(row_count)),
                         llm_text_enabled=bool(st.session_state.schema_llm_text),
+                        text_model=text_model,
                     )
                 st.session_state.schema_result = result
-                st.session_state.schema_zip_bytes = package_download(result)
+                zip_bytes = package_download(result)
+                st.session_state.schema_zip_bytes = zip_bytes
+                package_path = Path(st.session_state.schema_workdir) / "schema_twin_package.zip"
+                package_path.write_bytes(zip_bytes)
                 perf = getattr(result.pipeline, "performance", None)
                 st.session_state.schema_run_metrics = {
                     "seconds": float(getattr(perf, "total_time_seconds", None) or run_stats["seconds"]),
@@ -274,11 +379,38 @@ with st.container(border=True):
                     ),
                     "rows_per_second": float(getattr(perf, "rows_per_second", 0) or 0) or None,
                 }
+                record_progress_once(
+                    schema_session.session_id,
+                    macro_step="generate",
+                    stage_id="generation",
+                    stage_label="Generate synthetic data",
+                    status=ProgressStatus.SUCCEEDED,
+                    counts={"rows": sum(int(value) for value in result.row_counts.values())},
+                )
+                result_view = schema_result_view(
+                    workspace_tools,
+                    schema_session.session_id,
+                    result,
+                    package_path=package_path,
+                )
+                workspace_tools.complete_session(
+                    CompleteSessionCommand(result=result_view)
+                )
+                st.session_state.schema_result_view_id = result_view.result_id
                 status.update(label="Synthetic dataset generated", state="complete", expanded=False)
             except Exception as exc:
                 st.session_state.schema_result = None
                 st.session_state.schema_zip_bytes = None
                 st.session_state.schema_run_metrics = None
+                st.session_state.schema_result_view_id = None
+                record_progress_once(
+                    schema_session.session_id,
+                    macro_step="generate",
+                    stage_id="generation",
+                    stage_label="Generate synthetic data",
+                    status=ProgressStatus.FAILED,
+                    message=f"Generation failed ({type(exc).__name__}).",
+                )
                 status.update(label="Generation failed", state="error")
                 show_user_error(
                     "The synthetic dataset could not be generated. Review the schema and settings.",
@@ -287,6 +419,7 @@ with st.container(border=True):
                 )
 
 result = st.session_state.schema_result
+render_backend_progress(schema_session.session_id)
 if result is None:
     st.stop()
 
@@ -393,3 +526,16 @@ with st.container(border=True):
         f"Intent: {st.session_state.schema_intent}. "
         "Generated from schema metadata — not from production records."
     )
+
+
+result_view_id = st.session_state.schema_result_view_id
+if result_view_id:
+    persisted_result = workspace_tools.get_result(
+        GetResultCommand(
+            session_id=schema_session.session_id,
+            result_id=result_view_id,
+        )
+    )
+    if persisted_result is not None:
+        render_result_summary(persisted_result)
+        render_project_save(schema_session.session_id)

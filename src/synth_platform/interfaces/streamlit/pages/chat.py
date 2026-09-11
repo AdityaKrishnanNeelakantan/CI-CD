@@ -12,6 +12,8 @@ from synth_platform.application.coordinator import (
     get_capability,
     route_request,
 )
+from synth_platform.domain.guardrails.models import GuardrailPolicy
+from synth_platform.engine.security.text_guardrails import DeterministicModelGuardrails
 from synth_platform.interfaces.streamlit.capabilities import capability_page_path
 from synth_platform.interfaces.streamlit.state import (
     ChatMessage,
@@ -25,6 +27,37 @@ _WELCOME = (
     "TXT/LOG interaction. I route the request; each specialized workflow still owns "
     "generation, validation, and artifacts."
 )
+
+
+_ROUTING_GUARDRAILS = DeterministicModelGuardrails()
+_ROUTING_POLICY = GuardrailPolicy(
+    name="deterministic_chat_routing",
+    max_input_characters=4_000,
+    max_output_characters=1,
+    require_json_object=False,
+)
+
+
+def _guard_routing_input(value: str):
+    return _ROUTING_GUARDRAILS.inspect_input(
+        "Select one registered synthetic-data capability.",
+        value,
+        _ROUTING_POLICY,
+    )
+
+
+def _record_guardrail_block(state: ChatState) -> None:
+    state.messages.append(ChatMessage(role="user", content="[Input blocked by policy]"))
+    state.messages.append(
+        ChatMessage(
+            role="assistant",
+            content=(
+                "I could not route that input because an input guardrail blocked it. "
+                "Choose a capability card or provide a scoped synthetic-data request."
+            ),
+        )
+    )
+    state.selected_capability = None
 
 
 def _apply_decision(
@@ -108,6 +141,11 @@ def run() -> None:
         "One conversational entry point. Specialized workflows. Deterministic routing."
     )
 
+    st.caption(
+        "Input guardrails mask sensitive values and block prompt-injection, scope, "
+        "or deterministic safety-policy violations before routing. Routing itself does not call an LLM."
+    )
+
     state = load_chat_state(st.session_state)
     if not state.messages:
         state.messages.append(ChatMessage(role="assistant", content=_WELCOME))
@@ -135,12 +173,19 @@ def run() -> None:
         use_container_width=True,
     ):
         names = tuple(item.name for item in uploaded_files)
-        decision = route_request(RouteRequest(attachment_names=names))
-        _apply_decision(
-            state,
-            decision,
-            f"Route attachments: {', '.join(names)}",
-        )
+        guarded = _guard_routing_input("\n".join(names))
+        if guarded.report.blocked:
+            _record_guardrail_block(state)
+        else:
+            decision = route_request(RouteRequest(attachment_names=names))
+            suffixes = ", ".join(
+                sorted({name.rsplit(".", 1)[-1].lower() for name in names if "." in name})
+            )
+            _apply_decision(
+                state,
+                decision,
+                f"Route {len(names)} attachment(s) by type: {suffixes or 'unknown'}",
+            )
         save_chat_state(st.session_state, state)
         st.rerun()
 
@@ -149,11 +194,17 @@ def run() -> None:
     )
     if prompt:
         names = tuple(item.name for item in uploaded_files) if uploaded_files else ()
-        user_content = prompt
-        if names:
-            user_content = f"{prompt}\n\nAttachments: {', '.join(names)}"
-        decision = route_request(RouteRequest(message=prompt, attachment_names=names))
-        _apply_decision(state, decision, user_content)
+        guarded = _guard_routing_input(prompt)
+        if guarded.report.blocked:
+            _record_guardrail_block(state)
+        else:
+            decision = route_request(
+                RouteRequest(message=guarded.user, attachment_names=names)
+            )
+            user_content = guarded.user
+            if names:
+                user_content = f"{user_content}\n\nAttachments: {len(names)} file(s)"
+            _apply_decision(state, decision, user_content)
         save_chat_state(st.session_state, state)
         st.rerun()
 

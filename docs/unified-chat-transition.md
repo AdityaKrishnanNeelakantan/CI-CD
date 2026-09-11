@@ -109,25 +109,64 @@ Raw transcript text is never written to the run directory. Immutable facts, part
 
 This implementation remains in the synthetic-data plane. It does not create a service agent, an MCP server, a database or queue dependency, or a Data Designer integration.
 
-## Phase 2: Reusable Capability Presenters
+## Phase 2: Shared Product Workspace (implemented foundation)
 
-- Extract the current page-owned presentation sequences into reusable capability presenters while leaving engine behavior unchanged.
-- Define workflow-specific input/result contracts where current facade shapes are asymmetric.
-- Carry uploaded bytes from chat into workflow-owned ingestion safely.
-- Present validation reports and artifacts back in the conversation.
-- Add durable task state only when synchronous Streamlit execution becomes an operational constraint.
+The current branch adds the common product layer around the Phase 1 hand-off:
 
-## Phase 3: Tool Gateway and Internal Deployment
+- local workflow sessions with source/configuration fingerprints only;
+- workflow-specific stage events grouped into shared wizard macro-steps;
+- normalized result views that keep execution, validation, and release separate;
+- approved-root, content-addressed artifact snapshots with checksum-verified downloads;
+- recoverable aggregate completion commits with a write-ahead journal and process lock;
+- permission-restricted process-temporary SQLite/PDF source staging with
+  disconnect/completion, process-exit, and 24-hour stale cleanup;
+- My Projects, Results, real Schema Templates, effective Settings, and Help pages;
+- atomic local JSON persistence under `<SP_OUTPUT_ROOT>/workspace`;
+- a localhost-only installed UI launcher until authenticated tenancy exists;
+- SHA-256 upload/configuration invalidation for Schema, PDF, and Interaction,
+  plus SHA-256 SQLite upload identity.
 
-- Add an API/tool facade over stable application contracts.
-- Introduce MCP only as an adapter below the coordinator; application workflows remain protocol-independent.
-- Add authentication/RBAC and deterministic policy enforcement.
+This foundation does not flatten specialized workflow contracts. Database still
+requires interactive semantic approval and source disconnect; PDF's
+redaction/de-identification path remains optional; Interaction keeps its
+sanitize-before-model release gate and exact package contract.
+
+Still pending from the broader presenter phase:
+
+- carry uploaded bytes from Chat into workflow-owned ingestion safely;
+- render an entire specialized wizard inline inside the conversation;
+- introduce durable asynchronous task execution only if synchronous Streamlit
+  becomes an operational constraint.
+
+## Guardrail foundation (implemented)
+
+The current runtime now places explicit checks at the boundaries shown in the
+guardrail architecture:
+
+- Chat and model input: sensitive-data masking, prompt-injection indicators,
+  scope/size validation, and conservative deterministic content policy;
+- model output: JSON/shape and size validation, sensitive-data rejection or
+  masking, content checks, and workflow-specific groundedness;
+- local tools: strict command DTOs plus operation/resource permission checks
+  before `WorkspaceService` access;
+- provider composition: loopback-only Ollama behind `GuardedChatModel`, with
+  deterministic fallback when unavailable or blocked.
+
+Reports contain categories and counts, not raw prompts or matched values. This
+foundation does not add a live service agent or MCP runtime. The local UI policy
+is not multi-user RBAC; authentication remains a prerequisite for networked
+operation. See `guardrails.md`.
+
+## Phase 3: Protocol Adapters and Internal Deployment
+
+- Add authentication/RBAC before exposing guarded operations beyond localhost.
+- Introduce MCP only as a thin adapter over `GuardedWorkspaceTools`; application workflows remain protocol-independent and command policy cannot be bypassed.
 - Add Redis/PostgreSQL/object storage only for demonstrated session, metadata, or artifact requirements.
-- Move internal inference from development serving to vLLM/NIM without changing workflow contracts.
+- Move internal inference from development serving to vLLM/NIM without changing guarded model/workflow contracts.
 
 ## Phase 4: Evaluation and Optimization
 
-- Normalize workflow traces: intent, selected capability, input contract, model identity, raw output, repairs, accepted artifact, validation verdicts, and latency.
+- Normalize workflow traces: intent, selected capability, safe input contract, model identity, guardrail category/count decisions, output fingerprint, repairs, accepted artifact, validation verdicts, and latency. Do not persist raw prompts/completions by default.
 - Establish privacy, retention, consent, and redaction controls before curating training data.
 - Build workflow-specific offline evaluation gates.
 - Improve prompts/rules first; evaluate QLoRA next; consider preference optimization only when reliable preference data exists.
@@ -148,6 +187,20 @@ interfaces/streamlit/capabilities.py
         +--> existing Database page/workflow
         +--> existing PDF page/workflow
         `--> existing Customer Interaction page/workflow
+
+specialized workflow outcome
+        |
+        v
+application/services/result_presentation.py
+        |
+        v
+application/services/workspace.py
+        |
+        v
+application/ports/workspace_repositories.py
+        ^
+        |
+infrastructure/persistence/local_workspace.py
 ```
 
 The interface mapping is intentionally outside `application/`: the application router knows product capability IDs and availability, but it does not import Streamlit pages.

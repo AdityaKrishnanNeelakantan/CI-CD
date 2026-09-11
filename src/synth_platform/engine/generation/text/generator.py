@@ -3,22 +3,30 @@
 from __future__ import annotations
 
 import json
-import os
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Protocol, Set
 
 import numpy as np
 import pandas as pd
 
-from synth_platform.engine.inference.schema.schema import Column
-from synth_platform.engine.generation.text.context import build_batch_contexts, context_cache_key
+from synth_platform.engine.generation.text.context import (
+    build_batch_contexts,
+    context_cache_key,
+)
 from synth_platform.engine.generation.text.eligibility import assess_column_eligibility
 from synth_platform.engine.generation.text.evidence import TextGenerationEvidence
 from synth_platform.engine.generation.text.fallback import fallback_text
-from synth_platform.engine.generation.text.prompts import build_system_message, build_text_generation_prompt
-from synth_platform.engine.generation.text.validators import sanitize_text, validate_generated_text
+from synth_platform.engine.generation.text.prompts import (
+    build_system_message,
+    build_text_generation_prompt,
+)
+from synth_platform.engine.generation.text.validators import (
+    sanitize_text,
+    validate_generated_text,
+)
 from synth_platform.engine.generation.text.vocabulary import get_domain_vocabulary
+from synth_platform.engine.inference.schema.schema import Column
 
 DEFAULT_MAX_LLM_ROWS = 50
 DEFAULT_BATCH_SIZE = 25
@@ -31,7 +39,7 @@ class TextGenerationConfig:
     is_preview: bool = True
     max_llm_rows: int = DEFAULT_MAX_LLM_ROWS
     batch_size: int = DEFAULT_BATCH_SIZE
-    provider: str = "openai"
+    provider: str = "guarded_local"
     model: Optional[str] = None
     locale: str = "en_US"
     domain: str = "generic"
@@ -47,11 +55,22 @@ class TextGenerationResult:
     provider_error: Optional[str] = None
 
 
-class TextGenerationEngine:
-    """Generate one text-heavy column with LLM + safe fallback."""
+class TextCompletionModel(Protocol):
+    name: str
 
-    def __init__(self, config: Optional[TextGenerationConfig] = None) -> None:
+    def complete(self, system: str, user: str, *, json_only: bool = True) -> str: ...
+
+
+class TextGenerationEngine:
+    """Generate one text-heavy column with guarded local LLM + safe fallback."""
+
+    def __init__(
+        self,
+        config: Optional[TextGenerationConfig] = None,
+        model: TextCompletionModel | None = None,
+    ) -> None:
         self.config = config or TextGenerationConfig()
+        self.model = model
         self._context_cache: Dict[str, str] = {}
         self._source_value_set: Set[str] = set()
 
@@ -66,6 +85,9 @@ class TextGenerationEngine:
     ) -> TextGenerationResult:
         start = time.perf_counter()
         params = column.distribution_params or {}
+        null_rng = np.random.default_rng(
+            (self.config.seed or 0) + hash(f"{table_name}.{column.name}") % (2**32)
+        )
         eligibility = assess_column_eligibility(column, table_name=table_name)
         evidence = TextGenerationEvidence(table=table_name, column=column.name, rows_requested=size)
 
@@ -110,9 +132,6 @@ class TextGenerationEngine:
 
         llm_values: Dict[int, str] = {}
         provider_error: Optional[str] = None
-        null_rng = np.random.default_rng(
-            (self.config.seed or 0) + hash(f"{table_name}.{column.name}") % (2**32)
-        )
         if llm_enabled:
             try:
                 llm_values, cache_hits, attempted = self._generate_llm_batch(
@@ -268,20 +287,10 @@ class TextGenerationEngine:
         vocab_words: List[str],
         column_purpose: Optional[str],
     ) -> List[str]:
-        provider = str(self.config.provider or "openai").lower()
-        if provider not in {"openai", "groq"}:
-            raise RuntimeError(f"Unsupported LLM provider: {provider}")
-        api_key = os.getenv("OPENAI_API_KEY") if provider == "openai" else os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError(f"{provider.upper()} API key is not configured")
-        try:
-            from openai import OpenAI
-        except Exception as exc:
-            raise RuntimeError("openai package is not installed; install mvp[llm]") from exc
-
-        base_url = os.getenv("OPENAI_BASE_URL") if provider == "openai" else os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-        model = self.config.model or os.getenv("MVP_LLM_TEXT_MODEL") or ("gpt-4o-mini" if provider == "openai" else "llama-3.1-8b-instant")
-        client = OpenAI(api_key=api_key, base_url=base_url or None, timeout=self.config.timeout)
+        if self.model is None:
+            raise RuntimeError(
+                "No guarded local ChatModel was injected; using deterministic templates."
+            )
         prompt = build_text_generation_prompt(
             table_name=table_name,
             column_name=column_name,
@@ -297,15 +306,11 @@ class TextGenerationEngine:
             column_purpose=column_purpose,
             domain_vocabulary=vocab_words,
         )
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": build_system_message()},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.7,
+        content = self.model.complete(
+            build_system_message(),
+            prompt,
+            json_only=True,
         )
-        content = response.choices[0].message.content or "[]"
         return self._parse_payload(content)
 
     @staticmethod
@@ -334,8 +339,9 @@ def generate_text_column(
     table_data: Optional[pd.DataFrame] = None,
     config: Optional[TextGenerationConfig] = None,
     source_series: Optional[pd.Series] = None,
+    model: TextCompletionModel | None = None,
 ) -> TextGenerationResult:
-    engine = TextGenerationEngine(config=config)
+    engine = TextGenerationEngine(config=config, model=model)
     return engine.generate(
         table_name=table_name,
         column=column,

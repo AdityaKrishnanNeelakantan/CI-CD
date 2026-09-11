@@ -101,6 +101,22 @@ def _record_stage(
     )
 
 
+def _model_enhancement_is_grounded(
+    enhancement: SemanticEnhancement,
+    deterministic: SemanticEnhancement,
+) -> bool:
+    """Admit only closed labels supported by deterministic source evidence."""
+    return (
+        set(enhancement.topics).issubset(deterministic.topics)
+        and set(enhancement.issue_codes).issubset(deterministic.issue_codes)
+        and set(enhancement.action_codes).issubset(deterministic.action_codes)
+        and enhancement.resolution_status == deterministic.resolution_status
+        and enhancement.initial_customer_sentiment
+        == deterministic.initial_customer_sentiment
+        and enhancement.final_customer_sentiment == deterministic.final_customer_sentiment
+    )
+
+
 def _model_semantics(
     transcript: SanitizedTranscript,
     model: ChatModel | None,
@@ -151,6 +167,8 @@ def _model_semantics(
     try:
         raw = model.complete(system, user, json_only=True)
         enhancement = SemanticEnhancement.model_validate_json(raw)
+        if not _model_enhancement_is_grounded(enhancement, deterministic):
+            raise ValueError("model semantics were not grounded in source evidence")
     except Exception as exc:  # noqa: BLE001 - optional adapter trust boundary
         reason = f"model output rejected ({type(exc).__name__})"
         return (

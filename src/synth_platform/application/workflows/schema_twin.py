@@ -21,6 +21,7 @@ from synth_platform.application.orchestration.schema.config import PipelineConfi
 from synth_platform.application.orchestration.schema.export import make_zip_from_paths
 from synth_platform.application.orchestration.schema.result import PipelineResult
 from synth_platform.application.orchestration.schema.schema_driven import run_schema_pipeline
+from synth_platform.engine.generation.text.generator import TextCompletionModel
 from synth_platform.engine.inference.schema.schema import Column, RealismConfig, Relationship, SchemaConfig, Table
 from synth_platform.engine.inference.schema.schema_columns import align_unique_int_ranges
 from synth_platform.engine.inference.schema.yaml_schema import load_yaml_schema
@@ -490,6 +491,7 @@ def generate_from_schema(
     preview_rows: int = 100,
     llm_text_enabled: bool = False,
     max_llm_rows: int = 50,
+    text_model: TextCompletionModel | None = None,
 ) -> SchemaModeResult:
     """Run the canonical schema-driven pipeline for Schema Mode."""
     prepared = prepare_schema_for_generation(
@@ -514,7 +516,7 @@ def generate_from_schema(
         llm_full_enabled=bool(llm_text_enabled),
         max_llm_rows=max(1, int(max_llm_rows)),
     )
-    pipeline = run_schema_pipeline(prepared, config)
+    pipeline = run_schema_pipeline(prepared, config, text_model=text_model)
     return SchemaModeResult(schema=prepared, pipeline=pipeline)
 
 

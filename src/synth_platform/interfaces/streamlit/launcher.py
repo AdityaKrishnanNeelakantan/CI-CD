@@ -1,4 +1,5 @@
 """Installed Streamlit launcher for the packaged UI."""
+
 from __future__ import annotations
 
 import os
@@ -16,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
         "run",
         str(app_path),
         *(argv if argv is not None else sys.argv[1:]),
+        "--server.address=127.0.0.1",
     ]
     os.execv(sys.executable, args)
     return 1

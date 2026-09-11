@@ -68,6 +68,15 @@ a {
   text-decoration: none;
 }
 
+.text-link {
+  color: var(--primary-hover);
+  font-weight: 780;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
 h1,
 h2,
 h3,
@@ -595,7 +604,8 @@ a:focus-visible {
 
 .upload-panel,
 .config-grid,
-.summary-grid {
+.summary-grid,
+.table-count-grid {
   display: grid;
   gap: 14px;
 }
@@ -603,6 +613,10 @@ a:focus-visible {
 .config-grid,
 .summary-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.table-count-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .file-drop {

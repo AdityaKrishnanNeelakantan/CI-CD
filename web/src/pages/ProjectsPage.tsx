@@ -36,7 +36,11 @@ export function ProjectsPage() {
             <tbody>
               {projects.map((project) => (
                 <tr key={project.id}>
-                  <td>{project.name}</td>
+                  <td>
+                    <Link className="text-link" to={`/projects/${project.id}`}>
+                      {project.name}
+                    </Link>
+                  </td>
                   <td>{project.workflow_label ?? project.type ?? project.workflow_type ?? "synthetic_twin"}</td>
                   <td>{project.records ?? project.record_count ?? "-"}</td>
                   <td>{project.created_on ?? project.created_at ?? project.updated_at ?? "-"}</td>
@@ -46,10 +50,9 @@ export function ProjectsPage() {
                   <td>
                     <div className="button-row">
                       <Link
-                        aria-disabled={!project.latest_result_id}
-                        className={`icon-button ${project.latest_result_id ? "" : "disabled"}`}
+                        className="icon-button"
                         title="View"
-                        to={project.latest_result_id ? `/results/${project.latest_result_id}` : "/projects"}
+                        to={`/projects/${project.id}`}
                       >
                         <Eye size={17} />
                       </Link>

@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ApiError,
   GenerateConfig,
@@ -25,6 +25,7 @@ const schemaWorkflow = workflows.find((workflow) => workflow.key === "schema")!;
 
 export function SchemaTwinPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const WorkflowIcon = schemaWorkflow.Icon;
   const [intent, setIntent] = useState("Development & testing");
   const [session, setSession] = useState<SchemaSession | null>(null);
@@ -42,6 +43,16 @@ export function SchemaTwinPage() {
   });
 
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+
+  useEffect(() => {
+    const state = location.state as { templateData?: UploadSchemaResponse } | null;
+    if (!state?.templateData) return;
+    setSession(state.templateData.session);
+    setSummary(state.templateData.summary);
+    setColumns(state.templateData.columns);
+    setLlmColumns(state.templateData.llm_text_columns);
+    navigate(".", { replace: true, state: null });
+  }, [location.state, navigate]);
 
   useEffect(() => {
     const settings = settingsQuery.data;
@@ -126,7 +137,7 @@ export function SchemaTwinPage() {
               <textarea disabled placeholder="Coming in Phase 4" />
             </label>
             <button className="secondary" disabled type="button">
-              Create from template
+              Template generation starts from the Templates page
             </button>
           </UploadPanel>
           {summary ? <Summary summary={summary} /> : null}

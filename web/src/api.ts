@@ -150,6 +150,7 @@ export type SettingsResponse = {
 
 export type ProjectSummary = {
   id: string;
+  project_id?: string;
   name: string;
   type?: string;
   workflow_type?: string;
@@ -166,8 +167,62 @@ export type ProjectSummary = {
   transfer?: string;
 };
 
+export type RunSummary = {
+  id: string;
+  run_id: string;
+  project_id: string;
+  workflow_type: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  result_id: string | null;
+  job_id: string | null;
+  validation_status: string | null;
+  validation_passed: boolean | null;
+  transfer_status: string;
+  transfer_allowed: boolean | null;
+  transfer_attempted_at: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ProjectDetail = ProjectSummary & {
+  project_id: string;
+  workflow_type: string;
+  created_at: string;
+  updated_at: string;
+  status: string;
+  latest_run_id: string | null;
+  latest_result_id: string | null;
+  metadata: Record<string, unknown>;
+  summary: Record<string, unknown> | null;
+  quality_report: Record<string, unknown> | null;
+  artifacts: ArtifactFileMetadata[] | null;
+  runs: RunSummary[];
+};
+
+export type RunDetail = RunSummary & {
+  summary: Record<string, unknown> | null;
+  quality_report: Record<string, unknown> | null;
+  artifacts: ArtifactFileMetadata[];
+  input: Record<string, unknown>;
+  config: Record<string, unknown>;
+};
+
 export type ProjectsResponse = {
   projects: ProjectSummary[];
+};
+
+export type ProjectDetailResponse = {
+  project: ProjectDetail;
+};
+
+export type ProjectRunsResponse = {
+  runs: RunSummary[];
+};
+
+export type RunDetailResponse = {
+  run: RunDetail;
 };
 
 export type SaveResultResponse = {
@@ -196,6 +251,28 @@ export type InteractionConfigureRequest = {
   output_format?: string;
   remove_sensitive_information?: boolean;
   seed?: number;
+};
+
+export type TemplateMetadata = {
+  template_id: string;
+  name: string;
+  description: string;
+  workflow_type: string;
+  category: string;
+  supported_formats: string[];
+  status: "available" | "coming_soon";
+  can_generate: boolean;
+  fields: Array<Record<string, unknown>>;
+  schema_preview?: Record<string, unknown>;
+  schema?: Record<string, unknown>;
+};
+
+export type TemplatesResponse = {
+  templates: TemplateMetadata[];
+};
+
+export type TemplateDetailResponse = {
+  template: TemplateMetadata;
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -231,6 +308,26 @@ export function updateSettings(settings: Partial<SettingsResponse>): Promise<Set
 export function getProjects(workflowType?: string): Promise<ProjectsResponse> {
   const query = workflowType ? `?workflow_type=${encodeURIComponent(workflowType)}` : "";
   return requestJson<ProjectsResponse>(`/api/projects${query}`);
+}
+
+export function getProject(projectId: string): Promise<ProjectDetailResponse> {
+  return requestJson<ProjectDetailResponse>(`/api/projects/${projectId}`);
+}
+
+export function getProjectRuns(projectId: string): Promise<ProjectRunsResponse> {
+  return requestJson<ProjectRunsResponse>(`/api/projects/${projectId}/runs`);
+}
+
+export function getRun(projectId: string, runId: string): Promise<RunDetailResponse> {
+  return requestJson<RunDetailResponse>(`/api/projects/${projectId}/runs/${runId}`);
+}
+
+export function getTemplates(): Promise<TemplatesResponse> {
+  return requestJson<TemplatesResponse>("/api/templates");
+}
+
+export function getTemplate(templateId: string): Promise<TemplateDetailResponse> {
+  return requestJson<TemplateDetailResponse>(`/api/templates/${templateId}`);
 }
 
 export function createSchemaSession(intent: string): Promise<SchemaSession> {
@@ -358,6 +455,13 @@ export function uploadSchemaFile(sessionId: string, file: File): Promise<UploadS
   return requestJson<UploadSchemaResponse>(`/api/schema/sessions/${sessionId}/schema-file`, {
     method: "POST",
     body
+  });
+}
+
+export function attachSchemaTemplate(sessionId: string, templateId: string): Promise<UploadSchemaResponse> {
+  return requestJson<UploadSchemaResponse>(`/api/schema/sessions/${sessionId}/template`, {
+    method: "POST",
+    body: JSON.stringify({ template_id: templateId })
   });
 }
 

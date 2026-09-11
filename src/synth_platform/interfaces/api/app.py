@@ -25,11 +25,11 @@ from synth_platform.application.workflows.schema_twin import (
 )
 from synth_platform.domain.privacy.llm_policy import LlmPolicyError
 from synth_platform.engine.documents.pdf.docling_engine import is_docling_available
+from synth_platform.engine.generation.schema.templates.library import list_templates, load_template
 from synth_platform.errors import TransferBlockedError
-from synth_platform.infrastructure.persistence.platform_db import PlatformDB, get_platform_db
+from synth_platform.infrastructure.persistence.platform_db import PlatformDB, ProjectRecord, RunRecord, get_platform_db
 from synth_platform.infrastructure.persistence.project_views import (
     load_project_summaries,
-    project_run_rows,
     read_product_settings,
     write_product_settings,
 )
@@ -66,6 +66,10 @@ class SchemaGenerateRequest(BaseModel):
     preview_rows: int | None = None
     llm_text_enabled: bool = False
     max_llm_rows: int = 50
+
+
+class SchemaTemplateRequest(BaseModel):
+    template_id: str
 
 
 class SettingsRequest(BaseModel):
@@ -193,6 +197,9 @@ def _register_routes(app: FastAPI) -> None:
             try:
                 project = db.get_project(str(saved_project_id))
                 run = db.get_run(str(saved_run_id))
+                metadata.update({"project_id": project.id, "run_id": run.id})
+                bundle["metadata"] = metadata
+                store.save_result_bundle(bundle)
                 return _ok({"project_id": project.id, "run_id": run.id, "project": project.__dict__, "saved": False})
             except KeyError:
                 pass
@@ -201,7 +208,14 @@ def _register_routes(app: FastAPI) -> None:
         existing_run = _saved_run_for_result(db, workflow_type, result_id)
         if existing_run is not None:
             project = db.get_project(existing_run.project_id)
-            metadata.update({"saved_project_id": project.id, "saved_run_id": existing_run.id})
+            metadata.update(
+                {
+                    "saved_project_id": project.id,
+                    "saved_run_id": existing_run.id,
+                    "project_id": project.id,
+                    "run_id": existing_run.id,
+                }
+            )
             bundle["metadata"] = metadata
             store.save_result_bundle(bundle)
             return _ok({"project_id": project.id, "run_id": existing_run.id, "project": project.__dict__, "saved": False})
@@ -210,6 +224,7 @@ def _register_routes(app: FastAPI) -> None:
         quality_report = bundle.get("quality_report") if isinstance(bundle.get("quality_report"), dict) else {}
         summary = bundle.get("summary") if isinstance(bundle.get("summary"), dict) else {}
         validation_passed = _validation_passed(quality_report)
+        session_state = _session_state_for_bundle(bundle)
         run = db.record_run(
             workflow_type=workflow_type,
             project_name=name,
@@ -220,14 +235,17 @@ def _register_routes(app: FastAPI) -> None:
             metadata={
                 "result_id": result_id,
                 "session_id": bundle.get("session_id"),
+                "job_id": metadata.get("job_id"),
                 "row_counts": summary.get("row_counts"),
                 "turn_count": summary.get("synthetic_turn_count"),
                 "artifact_count": len(bundle.get("artifacts") or []),
+                "input": _public_session_input(session_state),
+                "config": _public_run_metadata(session_state.get("config") if isinstance(session_state.get("config"), dict) else {}),
             },
             run_id=f"result-{result_id}",
         )
         project = db.get_project(run.project_id)
-        metadata.update({"saved_project_id": project.id, "saved_run_id": run.id})
+        metadata.update({"saved_project_id": project.id, "saved_run_id": run.id, "project_id": project.id, "run_id": run.id})
         bundle["metadata"] = metadata
         store.save_result_bundle(bundle)
         return _ok({"project_id": project.id, "run_id": run.id, "project": project.__dict__, "saved": True})
@@ -277,6 +295,38 @@ def _register_routes(app: FastAPI) -> None:
             {
                 "stage": "schema_review",
                 "schema_file": {"filename": file.filename, "path": str(schema_blob), "size": len(raw)},
+                "schema": schema.model_dump(mode="json"),
+                "summary": summary.__dict__,
+                "columns": schema_column_details(schema),
+                "llm_text_columns": list_llm_text_columns(schema),
+                "result_session_id": None,
+            }
+        )
+        record["state"] = state
+        record = store.save_session(record)
+        return _ok(
+            {
+                "session": _session_response(record),
+                "summary": state["summary"],
+                "columns": state["columns"],
+                "llm_text_columns": state["llm_text_columns"],
+            }
+        )
+
+    @app.post("/api/schema/sessions/{session_id}/template")
+    def attach_schema_template(session_id: str, body: SchemaTemplateRequest) -> dict[str, Any]:
+        store = get_api_store()
+        record = _get_schema_session(session_id)
+        template = _get_template_metadata(body.template_id)
+        if not template.get("can_generate"):
+            _raise(409, "template_unavailable", f"Template {body.template_id!r} is not available for generation.")
+        schema = load_template(body.template_id)
+        summary = summarize_schema(schema)
+        state = dict(record.get("state") or {})
+        state.update(
+            {
+                "stage": "schema_review",
+                "template": template,
                 "schema": schema.model_dump(mode="json"),
                 "summary": summary.__dict__,
                 "columns": schema_column_details(schema),
@@ -357,13 +407,43 @@ def _register_routes(app: FastAPI) -> None:
         summaries = load_project_summaries(get_platform_db(), workflow_type=workflow_type)
         return _ok({"projects": [summary.__dict__ for summary in summaries]})
 
-    @app.get("/api/projects/{project_id}/runs")
-    def get_project_runs(project_id: str) -> dict[str, Any]:
+    @app.get("/api/projects/{project_id}")
+    def get_project_detail(project_id: str) -> dict[str, Any]:
+        db = get_platform_db()
         try:
-            get_platform_db().get_project(project_id)
+            project = db.get_project(project_id)
         except KeyError:
             _raise(404, "not_found", f"Project {project_id!r} was not found.")
-        return _ok({"runs": project_run_rows(get_platform_db(), project_id)})
+        return _ok({"project": _project_detail_response(db, project)})
+
+    @app.get("/api/projects/{project_id}/runs")
+    def get_project_runs(project_id: str) -> dict[str, Any]:
+        db = get_platform_db()
+        try:
+            db.get_project(project_id)
+        except KeyError:
+            _raise(404, "not_found", f"Project {project_id!r} was not found.")
+        return _ok({"runs": [_run_summary_response(run) for run in db.list_runs(project_id=project_id)]})
+
+    @app.get("/api/projects/{project_id}/runs/{run_id}")
+    def get_project_run_detail(project_id: str, run_id: str) -> dict[str, Any]:
+        db = get_platform_db()
+        try:
+            run = db.get_run(run_id)
+        except KeyError:
+            _raise(404, "not_found", f"Run {run_id!r} was not found.")
+        if run.project_id != project_id:
+            _raise(404, "not_found", f"Run {run_id!r} was not found for project {project_id!r}.")
+        return _ok({"run": _run_detail_response(run)})
+
+    @app.get("/api/templates")
+    def get_templates() -> dict[str, Any]:
+        templates = [_get_template_metadata(template_id) for template_id in _all_template_ids()]
+        return _ok({"templates": templates})
+
+    @app.get("/api/templates/{template_id}")
+    def get_template_detail(template_id: str) -> dict[str, Any]:
+        return _ok({"template": _get_template_metadata(template_id, include_schema=True)})
 
     @app.patch("/api/projects/{project_id}")
     def update_project(project_id: str, body: ProjectUpdateRequest) -> dict[str, Any]:
@@ -553,6 +633,103 @@ def _result_response(record: dict[str, Any]) -> dict[str, Any]:
     return ResultBundle.model_validate(normalized).model_dump(mode="json")
 
 
+def _project_detail_response(db: PlatformDB, project: ProjectRecord) -> dict[str, Any]:
+    runs = db.list_runs(project_id=project.id)
+    latest_run = runs[0] if runs else None
+    latest_result_id = latest_run.output_id if latest_run else project.metadata.get("latest_result_id")
+    latest_result = _optional_result_response(str(latest_result_id)) if latest_result_id else None
+    artifacts = latest_result.get("artifacts") if isinstance(latest_result, dict) else None
+    return {
+        "project_id": project.id,
+        "id": project.id,
+        "name": project.name,
+        "workflow_type": project.workflow_type,
+        "created_at": project.created_at,
+        "updated_at": project.updated_at,
+        "status": project.status,
+        "latest_run_id": latest_run.id if latest_run else None,
+        "latest_result_id": latest_result_id,
+        "metadata": project.metadata,
+        "summary": latest_result.get("summary") if isinstance(latest_result, dict) else None,
+        "quality_report": latest_result.get("quality_report") if isinstance(latest_result, dict) else None,
+        "artifacts": artifacts,
+        "runs": [_run_summary_response(run) for run in runs],
+    }
+
+
+def _run_summary_response(run: RunRecord) -> dict[str, Any]:
+    return {
+        "run_id": run.id,
+        "id": run.id,
+        "project_id": run.project_id,
+        "workflow_type": run.workflow_type,
+        "status": run.status,
+        "created_at": run.created_at,
+        "updated_at": run.updated_at,
+        "completed_at": run.metadata.get("completed_at"),
+        "result_id": run.output_id or run.metadata.get("result_id"),
+        "job_id": run.metadata.get("job_id"),
+        "validation_status": run.validation_status,
+        "validation_passed": run.validation_passed,
+        "transfer_status": run.transfer_status,
+        "transfer_allowed": run.transfer_allowed,
+        "transfer_attempted_at": run.transfer_attempted_at,
+        "metadata": _public_run_metadata(run.metadata),
+    }
+
+
+def _run_detail_response(run: RunRecord) -> dict[str, Any]:
+    result_id = run.output_id or run.metadata.get("result_id")
+    result = _optional_result_response(str(result_id)) if result_id else None
+    return {
+        **_run_summary_response(run),
+        "summary": result.get("summary") if isinstance(result, dict) else run.metadata.get("summary"),
+        "quality_report": result.get("quality_report") if isinstance(result, dict) else run.metadata.get("quality_report"),
+        "artifacts": result.get("artifacts") if isinstance(result, dict) else [],
+        "input": _public_run_metadata(run.metadata.get("input") if isinstance(run.metadata.get("input"), dict) else {}),
+        "config": _public_run_metadata(run.metadata.get("config") if isinstance(run.metadata.get("config"), dict) else {}),
+    }
+
+
+def _public_run_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if key in {"path", "download_path"} or key.endswith("_path"):
+            continue
+        if isinstance(value, dict):
+            safe[key] = _public_run_metadata(value)
+        else:
+            safe[key] = value
+    return safe
+
+
+def _session_state_for_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+    session_id = bundle.get("session_id")
+    if not session_id:
+        return {}
+    try:
+        session = get_api_store().get_session(str(session_id))
+    except KeyError:
+        return {}
+    state = session.get("state")
+    return state if isinstance(state, dict) else {}
+
+
+def _public_session_input(state: dict[str, Any]) -> dict[str, Any]:
+    for key in ("schema_file", "template", "source", "document", "transcript"):
+        value = state.get(key)
+        if isinstance(value, dict):
+            return {key: _public_run_metadata(value)}
+    return {}
+
+
+def _optional_result_response(result_id: str) -> dict[str, Any] | None:
+    try:
+        return _result_response(get_api_store().get_result_bundle(result_id))
+    except KeyError:
+        return None
+
+
 def _artifact_response(result_id: str, artifact: dict[str, Any]) -> dict[str, Any]:
     item = dict(artifact)
     artifact_id = str(item.get("artifact_id") or item.get("id") or item.get("name"))
@@ -617,6 +794,70 @@ def _project_name_for_result(bundle: dict[str, Any]) -> str:
     summary = bundle.get("summary") if isinstance(bundle.get("summary"), dict) else {}
     explicit = summary.get("name") or summary.get("doc_id")
     return str(explicit or f"{labels.get(workflow_type, workflow_type)} Result")
+
+
+def _all_template_ids() -> list[str]:
+    return [*list_templates(), "sqlite-customer-360", "document-bank-statement", "support-transcript"]
+
+
+def _get_template_metadata(template_id: str, *, include_schema: bool = False) -> dict[str, Any]:
+    schema_ids = set(list_templates())
+    static: dict[str, dict[str, Any]] = {
+        "sqlite-customer-360": {
+            "template_id": "sqlite-customer-360",
+            "name": "SQLite Customer 360",
+            "description": "Database Twin project shape for customer, account, and event tables.",
+            "workflow_type": "database_twin",
+            "category": "database",
+            "supported_formats": ["sqlite"],
+            "status": "coming_soon",
+            "can_generate": False,
+            "fields": [],
+        },
+        "document-bank-statement": {
+            "template_id": "document-bank-statement",
+            "name": "Bank Statement PDF",
+            "description": "Document Twin template metadata for bank statement extraction and rendering.",
+            "workflow_type": "pdf_twin",
+            "category": "document",
+            "supported_formats": ["pdf"],
+            "status": "coming_soon",
+            "can_generate": False,
+            "fields": [],
+        },
+        "support-transcript": {
+            "template_id": "support-transcript",
+            "name": "Support Transcript",
+            "description": "Interaction Twin transcript shape for support chats and logs.",
+            "workflow_type": "interaction_twin",
+            "category": "interaction",
+            "supported_formats": ["txt", "log"],
+            "status": "coming_soon",
+            "can_generate": False,
+            "fields": [],
+        },
+    }
+    if template_id in static:
+        return dict(static[template_id])
+    if template_id not in schema_ids:
+        _raise(404, "not_found", f"Template {template_id!r} was not found.")
+    schema = load_template(template_id)
+    summary = summarize_schema(schema)
+    metadata = {
+        "template_id": template_id,
+        "name": schema.name,
+        "description": schema.description or f"{schema.name} schema template",
+        "workflow_type": "schema_twin",
+        "category": schema.domain or template_id,
+        "supported_formats": ["json", "csv", "parquet"],
+        "status": "available",
+        "can_generate": True,
+        "fields": schema_column_details(schema)[:80],
+        "schema_preview": summary.__dict__,
+    }
+    if include_schema:
+        metadata["schema"] = schema.model_dump(mode="json")
+    return metadata
 
 
 def _validation_passed(report: dict[str, Any]) -> bool | None:

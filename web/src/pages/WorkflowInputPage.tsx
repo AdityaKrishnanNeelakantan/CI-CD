@@ -33,7 +33,12 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
   const [session, setSession] = useState<WorkflowSession | null>(null);
   const [connection, setConnection] = useState("");
   const [rowCount, setRowCount] = useState(100);
+  const [rowCountsByTable, setRowCountsByTable] = useState<Record<string, number>>({});
+  const [sampleLimit, setSampleLimit] = useState(100);
   const [seed, setSeed] = useState(42);
+  const [modelType, setModelType] = useState("safe_gaussian_copula");
+  const [extractionMethod, setExtractionMethod] = useState("auto");
+  const [llmTextEnabled, setLlmTextEnabled] = useState(false);
   const [interactionType, setInteractionType] = useState("support_chat");
   const [outputFormat, setOutputFormat] = useState("structured_json");
   const [removeSensitive, setRemoveSensitive] = useState(true);
@@ -51,6 +56,10 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
     },
     onSuccess: (nextSession) => {
       setSession(nextSession);
+      const tables = sourceTables(nextSession);
+      if (tables.length) {
+        setRowCountsByTable(Object.fromEntries(tables.map((table) => [table, rowCount])));
+      }
       setUploaded(true);
       setError("");
     },
@@ -66,11 +75,21 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
       const currentSession = session ?? (await createSession(workflow.key, intent));
       setSession(currentSession);
       if (workflow.key === "database") {
-        await configureDatabaseSession(currentSession.id, { row_count: rowCount, seed });
+        await configureDatabaseSession(currentSession.id, {
+          row_count: rowCount,
+          row_counts_by_table: Object.keys(rowCountsByTable).length ? rowCountsByTable : undefined,
+          sample_limit: sampleLimit,
+          seed,
+          model_type: modelType
+        });
         return startDatabaseGeneration(currentSession.id);
       }
       if (workflow.key === "document") {
-        await configureDocumentSession(currentSession.id, { seed, extraction_method: "auto", llm_text_enabled: false });
+        await configureDocumentSession(currentSession.id, {
+          seed,
+          extraction_method: extractionMethod === "auto" ? undefined : extractionMethod,
+          llm_text_enabled: llmTextEnabled
+        });
         return startDocumentGeneration(currentSession.id);
       }
       await configureInteractionSession(currentSession.id, {
@@ -87,6 +106,9 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
 
   const uploadLabel =
     workflow.key === "database" ? "Database or sample file" : workflow.key === "document" ? "PDF document" : "Transcript file";
+  const tables = sourceTables(session);
+  const document = session?.state.document as Record<string, unknown> | undefined;
+  const transcript = session?.state.transcript as Record<string, unknown> | undefined;
 
   return (
     <div className="page-stack">
@@ -126,6 +148,24 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
           ) : null}
           <UploadPanel accept={acceptForWorkflow(workflow.key)} busy={uploadMutation.isPending} label={uploadLabel} onFile={(file) => uploadMutation.mutate(file)} />
           {workflow.key === "database" ? <div className="empty">SQLite upload is supported. CSV, Parquet, and PostgreSQL are coming soon.</div> : null}
+          {tables.length ? (
+            <div className="summary-grid">
+              <Metric label="Tables" value={tables.length} />
+              <Metric label="Source" value="SQLite" />
+            </div>
+          ) : null}
+          {document ? (
+            <div className="summary-grid">
+              <Metric label="Document" value={String(document.filename ?? "PDF")} />
+              <Metric label="Size" value={formatBytes(Number(document.size ?? 0))} />
+            </div>
+          ) : null}
+          {transcript ? (
+            <div className="summary-grid">
+              <Metric label="Transcript" value={String(transcript.filename ?? "TXT/LOG")} />
+              <Metric label="Turns" value={Number(transcript.turn_count ?? 0)} />
+            </div>
+          ) : null}
           {session ? <div className="empty">Session ready: {session.id}</div> : null}
         </div>
         <div className="panel">
@@ -140,6 +180,55 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
               <input min={0} type="number" value={seed} onChange={(event) => setSeed(Number(event.target.value))} />
             </label>
           </div>
+          {workflow.key === "database" ? (
+            <>
+              <div className="config-grid">
+                <label>
+                  Sample limit
+                  <input min={1} type="number" value={sampleLimit} onChange={(event) => setSampleLimit(Number(event.target.value))} />
+                </label>
+                <label>
+                  Model
+                  <select value={modelType} onChange={(event) => setModelType(event.target.value)}>
+                    <option value="safe_gaussian_copula">Safe Gaussian copula</option>
+                  </select>
+                </label>
+              </div>
+              {tables.length ? (
+                <div className="table-count-grid">
+                  {tables.map((table) => (
+                    <label key={table}>
+                      {table}
+                      <input
+                        min={1}
+                        type="number"
+                        value={rowCountsByTable[table] ?? rowCount}
+                        onChange={(event) => setRowCountsByTable({ ...rowCountsByTable, [table]: Number(event.target.value) })}
+                      />
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {workflow.key === "document" ? (
+            <>
+              <label>
+                Extraction method
+                <select value={extractionMethod} onChange={(event) => setExtractionMethod(event.target.value)}>
+                  <option value="auto">Auto</option>
+                  <option value="native">Native PDF</option>
+                  <option value="ocr">OCR</option>
+                  <option value="docling">Docling</option>
+                </select>
+              </label>
+              <label className="toggle">
+                <input checked={llmTextEnabled} type="checkbox" onChange={(event) => setLlmTextEnabled(event.target.checked)} />
+                <span>Use LLM for synthetic text fields</span>
+              </label>
+              <div className="empty">Document type, redaction level, preserve layout, and PDF output controls depend on backend support and remain automatic in this phase.</div>
+            </>
+          ) : null}
           {workflow.key === "interaction" ? (
             <>
               <label>
@@ -161,6 +250,7 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
                 <input checked={removeSensitive} type="checkbox" onChange={(event) => setRemoveSensitive(event.target.checked)} />
                 <span>Remove sensitive information</span>
               </label>
+              <div className="empty">Conversation count and message count controls are coming soon.</div>
             </>
           ) : null}
           <button className="primary" disabled={!uploaded || generateMutation.isPending} onClick={() => generateMutation.mutate()}>
@@ -187,6 +277,28 @@ function acceptForWorkflow(key: WorkflowConfig["key"]) {
 
 function sourceTypeForFile(name: string) {
   return "sqlite";
+}
+
+function sourceTables(session: WorkflowSession | null): string[] {
+  const source = session?.state.source as Record<string, unknown> | undefined;
+  const tables = source?.tables;
+  return Array.isArray(tables) ? tables.map(String) : [];
+}
+
+function formatBytes(size: number) {
+  if (!Number.isFinite(size) || size <= 0) return "-";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} KB`;
+  return `${Math.round(size / 1024 / 102.4) / 10} MB`;
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
 }
 
 function validateUpload(key: WorkflowConfig["key"], file: File) {

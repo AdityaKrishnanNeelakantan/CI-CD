@@ -1,4 +1,7 @@
-# Python
+.git/
+.github/
+.venv/
+.venv*/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -7,18 +10,13 @@ __pycache__/
 .mypy_cache/
 .coverage
 htmlcov/
-.venv/
-.venv*/
 .pycache-ci/
 
-# Node / frontend
-node_modules/
 web/node_modules/
 web/dist/
 web/coverage/
-web/.vite/
+node_modules/
 
-# Local runtime state and generated artifacts
 .staging/
 .data/
 output/
@@ -29,17 +27,12 @@ artifact-delivery/
 *.sqlite3
 *.log
 
-# Local environment files
 .env
 .env.local
 web/.env
 web/.env.local
-
-# OS / editor
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
 
-# Local-only test fixture scratch area
-tests/fixtures/local-data/
+docs/
+tests/

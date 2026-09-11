@@ -79,6 +79,7 @@ export function workflowForType(workflowType?: string | null): WorkflowConfig {
     pdf: "document",
     pdf_twin: "document",
     document: "document",
+    document_twin: "document",
     interaction: "interaction",
     interaction_twin: "interaction"
   };

@@ -27,6 +27,7 @@ export function SchemaTwinPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const WorkflowIcon = schemaWorkflow.Icon;
+  const routedContext = useMemo(() => routedContextFromSearch(location.search), [location.search]);
   const [intent, setIntent] = useState("Development & testing");
   const [session, setSession] = useState<SchemaSession | null>(null);
   const [summary, setSummary] = useState<SchemaSummary | null>(null);
@@ -64,6 +65,18 @@ export function SchemaTwinPage() {
       preview_rows: Math.min(100, settings.default_record_count)
     }));
   }, [settingsQuery.data]);
+
+  useEffect(() => {
+    if (!routedContext.prompt) return;
+    setIntent(routedContext.prompt);
+    const recordCount = routedContext.intent?.prefill?.record_count;
+    const outputFormat = routedContext.intent?.prefill?.output_format;
+    setConfig((current) => ({
+      ...current,
+      row_count: typeof recordCount === "number" ? recordCount : current.row_count,
+      export_format: outputFormat === "parquet" ? "parquet" : outputFormat === "csv" ? "csv" : current.export_format
+    }));
+  }, [routedContext]);
 
   const activeStep = useMemo(() => (summary ? 1 : 0), [summary]);
 
@@ -118,6 +131,9 @@ export function SchemaTwinPage() {
         </div>
       </section>
       <WorkflowStepper activeIndex={activeStep} steps={schemaWorkflow.steps} />
+      {routedContext.prompt || routedContext.filename ? (
+        <RoutedBanner title={schemaWorkflow.title} prompt={routedContext.prompt} filename={routedContext.filename} />
+      ) : null}
       {error ? <Alert message={error} /> : null}
       <section className="two-column">
         <div className="panel">
@@ -187,6 +203,34 @@ export function SchemaTwinPage() {
           <DataTable rows={columns} />
         </section>
       ) : null}
+    </div>
+  );
+}
+
+function routedContextFromSearch(search: string) {
+  const params = new URLSearchParams(search);
+  return {
+    prompt: params.get("prompt") ?? "",
+    filename: params.get("filename") ?? "",
+    intent: parseIntent(params.get("intent"))
+  };
+}
+
+function parseIntent(raw: string | null): { prefill?: { record_count?: number | null; output_format?: string | null } } | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(decodeURIComponent(raw));
+  } catch {
+    return null;
+  }
+}
+
+function RoutedBanner({ title, prompt, filename }: { title: string; prompt: string; filename: string }) {
+  return (
+    <div className="route-banner">
+      <strong>Started from chat request: {prompt ? `"${prompt}"` : "attached file"}</strong>
+      <span>Detected workflow: {title}</span>
+      {filename ? <span>Attached file: {filename}. Upload it here to continue with generation.</span> : null}
     </div>
   );
 }

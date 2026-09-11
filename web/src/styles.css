@@ -419,6 +419,77 @@ label {
   width: 100%;
 }
 
+.attached-file {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding-left: 50px;
+}
+
+.intent-result,
+.route-banner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-xs);
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.intent-result h3 {
+  font-size: 1.08rem;
+}
+
+.intent-result p {
+  color: var(--muted-strong);
+  line-height: 1.45;
+  margin-top: 5px;
+}
+
+.confidence {
+  color: var(--success);
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 820;
+  margin-top: 9px;
+}
+
+.intent-warnings,
+.route-banner {
+  color: var(--muted-strong);
+  font-size: 0.88rem;
+}
+
+.intent-warnings {
+  display: grid;
+  gap: 6px;
+}
+
+.intent-alternatives {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.choice-card {
+  align-items: center;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  min-height: 52px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.intent-continue {
+  justify-self: start;
+}
+
 .attachment-button input {
   height: 1px;
   min-height: 0;

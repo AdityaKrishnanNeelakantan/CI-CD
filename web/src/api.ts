@@ -252,6 +252,52 @@ export type InteractionConfigureRequest = {
   seed?: number;
 };
 
+export type WorkflowIntentAttachment = {
+  filename?: string;
+  content_type?: string;
+  size_bytes?: number;
+  extension?: string;
+  upload_id?: string;
+  path?: string;
+  content_preview?: string;
+};
+
+export type WorkflowIntentRequest = {
+  message: string;
+  attachments: WorkflowIntentAttachment[];
+  allow_auto_start: boolean;
+};
+
+export type WorkflowIntentAlternative = {
+  workflow_type: string;
+  confidence: number;
+  reason: string;
+};
+
+export type WorkflowIntentResponse = {
+  workflow_type: string;
+  confidence: number;
+  reason: string;
+  suggested_route: string;
+  can_auto_start: boolean;
+  next_action: "upload_required" | "configure_required" | "ready_to_generate" | "choose_workflow" | "unsupported";
+  detected_input: {
+    kind: string;
+    file_type: string | null;
+    source: string;
+  };
+  prefill: {
+    record_count: number | null;
+    privacy_level: string | null;
+    output_format: string | null;
+    interaction_type: string | null;
+    document_type: string | null;
+    other: Record<string, unknown>;
+  };
+  alternatives: WorkflowIntentAlternative[];
+  warnings: string[];
+};
+
 export type TemplateMetadata = {
   template_id: string;
   name: string;
@@ -301,6 +347,13 @@ export function updateSettings(settings: Partial<SettingsResponse>): Promise<Set
   return requestJson<SettingsResponse>("/api/settings", {
     method: "PUT",
     body: JSON.stringify(settings)
+  });
+}
+
+export function classifyWorkflowIntent(request: WorkflowIntentRequest): Promise<WorkflowIntentResponse> {
+  return requestJson<WorkflowIntentResponse>("/api/intent/workflow", {
+    method: "POST",
+    body: JSON.stringify(request)
   });
 }
 

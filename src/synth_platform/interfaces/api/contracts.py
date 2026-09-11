@@ -6,7 +6,18 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-WorkflowType = Literal["schema_twin", "database_twin", "pdf_twin", "interaction_twin"]
+from synth_platform.application.dto.intent import (
+    DetectedWorkflowInput,
+    IntentNextAction,
+    IntentWorkflowType,
+    WorkflowIntentAlternative,
+    WorkflowIntentAttachment,
+    WorkflowIntentPrefill,
+    WorkflowIntentRequest,
+    WorkflowIntentResponse,
+)
+
+WorkflowType = Literal["schema_twin", "database_twin", "pdf_twin", "document_twin", "interaction_twin"]
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 
 
@@ -72,3 +83,4 @@ class ResultBundle(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+

@@ -82,7 +82,7 @@ class DataSimulator:
                  llm_text_enabled: bool = False,
                  max_llm_rows: int = 50,
                  is_preview: bool = True,
-                 llm_provider: str = "openai",
+                 llm_provider: str = "ollama",
                  llm_model: Optional[str] = None,
                  custom_generators: Optional[Dict[str, Dict[str, Any]]] = None):
         """

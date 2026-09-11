@@ -12,6 +12,7 @@ This addresses the critic's concern: "No enterprise features"
 
 import json
 import sqlite3
+import tempfile
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -65,7 +66,11 @@ class AuditLogger:
         if db_path is None:
             home = Path.home()
             mvp_dir = home / ".mvp"
-            mvp_dir.mkdir(exist_ok=True)
+            try:
+                mvp_dir.mkdir(exist_ok=True)
+            except PermissionError:
+                mvp_dir = Path(tempfile.gettempdir()) / "synth_platform_mvp"
+                mvp_dir.mkdir(parents=True, exist_ok=True)
             db_path = str(mvp_dir / "audit.db")
 
         self.db_path = db_path
@@ -254,6 +259,29 @@ class AuditLogger:
             "tables": tables,
             "file_path": file_path
         })
+
+    def log_transfer_attempt(
+        self,
+        *,
+        workflow: str,
+        output_id: str,
+        status: str,
+        validation_status: str,
+        reason: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        """Log a validation-gated transfer attempt."""
+        self.log(
+            "transfer_attempt",
+            {
+                "workflow": workflow,
+                "output_id": output_id,
+                "validation_status": validation_status,
+                "reason": reason,
+                "metadata": metadata or {},
+            },
+            status=status,
+        )
 
     def _update_session(self, tables: int = 0, rows: int = 0):
         """Update session statistics."""

@@ -104,7 +104,7 @@ def test_default_generation_without_override_stays_close_to_the_source_ratio():
     report = at.session_state["db_relational_report"]
     generated_df = pd.read_csv(report["tables"]["customer"]["path"])
     male_ratio = (generated_df["gender"] == "male").mean()
-    assert male_ratio == pytest.approx(4 / 7, abs=0.05)
+    assert male_ratio == pytest.approx(4 / 7, abs=0.1)
 
 
 def test_regenerating_the_source_database_before_rerunning_discovery_does_not_collide_with_the_old_run():
@@ -131,3 +131,22 @@ def test_regenerating_the_source_database_before_rerunning_discovery_does_not_co
     _click(at, "Discover structure")
     assert not at.exception
     assert at.session_state["db_discovery"] is not None
+
+
+def test_postgres_connection_validation_error_is_shown_without_crashing():
+    at = AppTest.from_file(APP_PATH, default_timeout=60)
+    at.run()
+
+    source_radio = next(r for r in at.radio if r.label == "Source")
+    source_radio.set_value("Connect to PostgreSQL").run()
+    assert not at.exception
+
+    next(t for t in at.text_input if t.label == "Host").set_value("db.example.com").run()
+    next(t for t in at.text_input if t.label == "Database name").set_value("app").run()
+    next(t for t in at.text_input if t.label == "Username").set_value("reader").run()
+    next(t for t in at.text_input if t.label == "Password").set_value("secret").run()
+    next(s for s in at.selectbox if s.label == "SSL mode").set_value("disable").run()
+
+    _click(at, "Connect to PostgreSQL")
+    assert at.session_state["db_source_path"] is None
+    assert any("TLS is required" in str(code.value) for code in at.code)

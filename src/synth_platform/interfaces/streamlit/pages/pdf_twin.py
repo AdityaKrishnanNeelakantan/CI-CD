@@ -12,6 +12,9 @@ from pathlib import Path
 
 import streamlit as st
 
+from synth_platform.application.services.transfer_service import TransferService
+from synth_platform.errors import TransferBlockedError
+from synth_platform.infrastructure.persistence.platform_db import get_platform_db
 from synth_platform.interfaces.streamlit.components.common.ux import (
     list_pdf_narrative_bindings,
     measure_generation,
@@ -433,15 +436,12 @@ with st.container(border=True):
             )
             st.rerun()
     else:
-        with open(st.session_state.pdf_rendered_path, "rb") as f:
-            pdf_bytes = f.read()
-        st.download_button("Download synthetic twin PDF", pdf_bytes, file_name="synthetic_twin.pdf", icon=":material/download:")
-
         if st.session_state.pdf_validation_report is None:
             if st.button("Validate twin", icon=":material/fact_check:"):
                 result = run_document_validation(
                     st.session_state.pdf_rendered_path, st.session_state.pdf_ground_truth, doc_id, manifest,
                     ground_truth_reference=str(st.session_state.pdf_source_path),
+                    history=get_platform_db(),
                 )
                 if not result.is_success():
                     show_user_error(
@@ -453,14 +453,33 @@ with st.container(border=True):
                     manifest.output_path(f"documents/{doc_id}/document_validation_report.json")
                 )
                 st.rerun()
+            try:
+                TransferService(transfer_recorder=get_platform_db()).downloadable_file(
+                    workflow="pdf_twin",
+                    output_id="synthetic_twin.pdf",
+                    validation_report=None,
+                    path=st.session_state.pdf_rendered_path,
+                    metadata={"file_name": "synthetic_twin.pdf", "doc_id": doc_id, "intent": st.session_state.pdf_intent},
+                )
+            except TransferBlockedError as exc:
+                block_reason = str(exc)
+            st.download_button(
+                "Download synthetic twin PDF",
+                b"",
+                file_name="synthetic_twin.pdf",
+                icon=":material/download:",
+                disabled=True,
+            )
+            st.warning(block_reason)
         else:
-            report = st.session_state.pdf_validation_report["report"]
-            if report["hard_checks_passed"]:
+            validation = st.session_state.pdf_validation_report
+            report = validation["report"]
+            if validation["hard_checks_passed"]:
                 validation_badge(True, passed_label="Validation passed")
             else:
                 validation_badge(False)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Integrity checks", "passed" if report["hard_checks_passed"] else "failed")
+            c1.metric("Integrity checks", "passed" if validation["hard_checks_passed"] else "failed")
             c2.metric("Field accuracy", f"{report['field_accuracy']:.0%}")
             matched = report.get("matched_fields")
             total = report.get("total_fields")
@@ -484,6 +503,31 @@ with st.container(border=True):
                     },
                 ],
             )
+            try:
+                transfer = TransferService(transfer_recorder=get_platform_db()).downloadable_file(
+                    workflow="pdf_twin",
+                    output_id="synthetic_twin.pdf",
+                    validation_report=validation,
+                    path=st.session_state.pdf_rendered_path,
+                    metadata={"file_name": "synthetic_twin.pdf", "doc_id": doc_id, "intent": st.session_state.pdf_intent},
+                )
+                with transfer.path.open("rb") as f:
+                    pdf_bytes = f.read()
+                st.download_button(
+                    "Download synthetic twin PDF",
+                    pdf_bytes,
+                    file_name="synthetic_twin.pdf",
+                    icon=":material/download:",
+                )
+            except TransferBlockedError as exc:
+                st.download_button(
+                    "Download synthetic twin PDF",
+                    b"",
+                    file_name="synthetic_twin.pdf",
+                    icon=":material/download:",
+                    disabled=True,
+                )
+                st.warning(str(exc))
             mode_outcomes(
                 [
                     "Synthetic twin PDF",

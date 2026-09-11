@@ -34,8 +34,36 @@ from synth_platform.engine.documents.pdf.render_service import (
 )
 from synth_platform.engine.documents.pdf.validation_service import (
     load_document_validation_report,
-    run_document_validation,
+    run_document_validation as _run_document_validation,
 )
+
+
+def run_document_validation(pdf_path, ground_truth, doc_id: str, manifest: RunManifest, ground_truth_reference: str, *, history=None):
+    result = _run_document_validation(pdf_path, ground_truth, doc_id, manifest, ground_truth_reference)
+    if history is not None:
+        try:
+            report = load_document_validation_report(
+                manifest.output_path(f"documents/{doc_id}/document_validation_report.json")
+            )
+            passed = bool(report.get("hard_checks_passed"))
+            history.record_run(
+                workflow_type="pdf",
+                project_name=doc_id,
+                status="completed" if passed else "failed",
+                validation_status="PASS" if passed else "FAIL",
+                validation_passed=passed,
+                output_id="synthetic_twin.pdf",
+                run_id=f"{manifest.run_id}:{doc_id}",
+                metadata={
+                    "doc_id": doc_id,
+                    "manifest_run_id": manifest.run_id,
+                    "rendered_pdf": str(pdf_path),
+                    "validation_report": str(manifest.output_path(f"documents/{doc_id}/document_validation_report.json")),
+                },
+            )
+        except Exception:
+            pass
+    return result
 
 WORKFLOW_STAGES = (
     "upload",

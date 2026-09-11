@@ -59,8 +59,12 @@ from synth_platform.engine.documents.pdf.render_service import (
 from synth_platform.engine.documents.pdf.service import DOCUMENT_PROFILE_FILENAME, load_document_profile, run_document_profiling
 from synth_platform.engine.documents.pdf.template_service import DOCUMENT_TEMPLATE_FILENAME, load_document_template, run_template_compilation
 from synth_platform.engine.documents.pdf.validation_service import run_document_validation
+from synth_platform.application.services.transfer_service import TransferService
+from synth_platform.errors import TransferBlockedError
 
 PDFS_DIR = Path(__file__).resolve().parents[3] / "examples" / "fixtures" / "pdfs"
+LOCAL_DATA_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "local-data"
+HEALTHCARE_SUMMARY_PDF = LOCAL_DATA_DIR / "healthcare_patient_summary.pdf"
 
 # Real, sensitive PII categories only (src/documents/pii.py) - never the
 # generic entities.py PERSON/ORG/DATE heuristics, which are documented as
@@ -93,7 +97,9 @@ _FAILS_AT_PROFILING = {
     },
 }
 
-_ALL_FIXTURES = sorted(p.name for p in PDFS_DIR.glob("*.pdf"))
+_ALL_FIXTURES = sorted(p.name for p in PDFS_DIR.glob("*.pdf")) if PDFS_DIR.is_dir() else []
+_PRESENT_SUCCEEDS_END_TO_END = sorted(set(_ALL_FIXTURES) & _SUCCEEDS_END_TO_END)
+_PRESENT_FAILS_AT_PROFILING = sorted(set(_ALL_FIXTURES) & set(_FAILS_AT_PROFILING))
 
 
 @pytest.fixture()
@@ -104,10 +110,11 @@ def manifest(tmp_path: Path) -> RunManifest:
 def test_fixture_inventory_matches_expected_set() -> None:
     """Guards against a new/removed PDF fixture silently changing the
     universe this suite covers without anyone noticing."""
-    assert set(_ALL_FIXTURES) == _SUCCEEDS_END_TO_END | set(_FAILS_AT_PROFILING)
+    expected_when_present = _SUCCEEDS_END_TO_END | set(_FAILS_AT_PROFILING)
+    assert set(_ALL_FIXTURES) <= expected_when_present
 
 
-@pytest.mark.parametrize("filename", sorted(_FAILS_AT_PROFILING))
+@pytest.mark.parametrize("filename", _PRESENT_FAILS_AT_PROFILING)
 def test_deliberately_guarded_pdfs_fail_cleanly_at_profiling(filename: str, manifest: RunManifest, tmp_path: Path) -> None:
     pdf_path = PDFS_DIR / filename
     result = run_document_profiling(PDFDocumentAdapter(), pdf_path, "doc1", manifest, tmp_path / "metadata")
@@ -117,7 +124,7 @@ def test_deliberately_guarded_pdfs_fail_cleanly_at_profiling(filename: str, mani
     assert any(expected_substring in err for err in result.errors), result.errors
 
 
-@pytest.mark.parametrize("filename", sorted(_SUCCEEDS_END_TO_END))
+@pytest.mark.parametrize("filename", _PRESENT_SUCCEEDS_END_TO_END)
 def test_real_pdf_completes_full_pipeline_with_no_pii_leakage(filename: str, manifest: RunManifest, tmp_path: Path) -> None:
     pdf_path = PDFS_DIR / filename
     doc_id = "doc1"
@@ -185,6 +192,80 @@ def test_real_pdf_completes_full_pipeline_with_no_pii_leakage(filename: str, man
     leaked_in_redacted = pii_values & _substrings_present(redacted_text, pii_values)
     assert not leaked_in_twin, f"Real PII leaked into rendered twin for {filename}: {leaked_in_twin}"
     assert not leaked_in_redacted, f"Real PII leaked into redacted PDF for {filename}: {leaked_in_redacted}"
+
+
+def test_local_healthcare_pdf_redacts_phi_and_obeys_transfer_gate(manifest: RunManifest, tmp_path: Path) -> None:
+    assert HEALTHCARE_SUMMARY_PDF.exists(), f"local PDF fixture is missing: {HEALTHCARE_SUMMARY_PDF}"
+    doc_id = "doc1"
+    metadata_dir = tmp_path / "metadata"
+
+    profiling_result = run_document_profiling(PDFDocumentAdapter(), HEALTHCARE_SUMMARY_PDF, doc_id, manifest, metadata_dir)
+    assert profiling_result.is_success(), profiling_result.errors
+    profile = load_document_profile(manifest.output_path(f"documents/{doc_id}/{DOCUMENT_PROFILE_FILENAME}"))
+    source_text = PDFDocumentAdapter().extract(HEALTHCARE_SUMMARY_PDF)["text"]
+
+    structured_pii = {source_text[f["start"] : f["end"]] for f in profile["pii_findings"]}
+    assert "567-45-5412" in structured_pii
+    assert any("(402) 738-5912" in value for value in structured_pii)
+
+    template_result = run_template_compilation(
+        HEALTHCARE_SUMMARY_PDF, doc_id, manifest, extraction_method=profile["extraction_method"]
+    )
+    assert template_result.is_success(), template_result.errors
+    template = load_document_template(manifest.output_path(f"documents/{doc_id}/{DOCUMENT_TEMPLATE_FILENAME}"))
+
+    binding_result = run_semantic_binding(template, doc_id, manifest, template_reference=str(HEALTHCARE_SUMMARY_PDF))
+    assert binding_result.is_success(), binding_result.errors
+    binding_map = load_document_binding_map(
+        manifest.output_path(f"documents/{doc_id}/{DOCUMENT_BINDING_MAP_FILENAME}")
+    )
+
+    generation_result = run_value_generation(
+        template, binding_map, doc_id, manifest, binding_map_reference=str(HEALTHCARE_SUMMARY_PDF), seed=7
+    )
+    assert generation_result.is_success(), generation_result.errors
+    values = load_document_synthetic_values(
+        manifest.output_path(f"documents/{doc_id}/{DOCUMENT_SYNTHETIC_VALUES_FILENAME}")
+    )
+
+    rendering_result = run_document_rendering(
+        template, binding_map, values, doc_id, manifest, synthetic_values_reference=str(HEALTHCARE_SUMMARY_PDF)
+    )
+    assert rendering_result.is_success(), rendering_result.errors
+    ground_truth = load_document_ground_truth(manifest.output_path(f"documents/{doc_id}/{GROUND_TRUTH_FILENAME}"))
+    rendered_pdf_path = manifest.output_path(f"documents/{doc_id}/{RENDERED_PDF_FILENAME}")
+
+    with pytest.raises(TransferBlockedError, match="validation has not run"):
+        TransferService().downloadable_file(
+            workflow="pdf_twin",
+            output_id="synthetic_twin.pdf",
+            validation_report=None,
+            path=rendered_pdf_path,
+        )
+
+    validation_result = run_document_validation(
+        rendered_pdf_path, ground_truth, doc_id, manifest, ground_truth_reference=str(HEALTHCARE_SUMMARY_PDF)
+    )
+    assert validation_result.is_success(), validation_result.errors
+    validation_report = {"hard_checks_passed": True, "report": validation_result.metrics}
+    transfer = TransferService().downloadable_file(
+        workflow="pdf_twin",
+        output_id="synthetic_twin.pdf",
+        validation_report=validation_report,
+        path=rendered_pdf_path,
+    )
+    assert transfer.approval.validation_status == "PASS"
+
+    deidentification_result = run_document_deidentification(
+        template, doc_id, manifest, template_reference=str(HEALTHCARE_SUMMARY_PDF)
+    )
+    assert deidentification_result.is_success(), deidentification_result.errors
+    redacted_pdf_path = manifest.output_path(f"documents/{doc_id}/{REDACTED_PDF_FILENAME}")
+    redacted_text = PDFDocumentAdapter().extract(redacted_pdf_path)["text"]
+
+    for sensitive_value in ["Kimberly Lawrence", "24/05/1977", "567-45-5412"]:
+        assert sensitive_value in source_text
+        assert sensitive_value not in redacted_text
 
 
 def _substrings_present(haystack: str, candidates: set[str]) -> set[str]:

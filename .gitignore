@@ -6,7 +6,11 @@
 artifact-delivery/
 build/
 dist/
+node_modules/
+web/node_modules/
+web/dist/
 *.egg-info/
 __pycache__/
 *.py[cod]
 .DS_Store
+tests/fixtures/local-data/

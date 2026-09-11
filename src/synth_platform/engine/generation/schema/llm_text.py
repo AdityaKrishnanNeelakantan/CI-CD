@@ -49,7 +49,7 @@ class SafeBankingTextGenerator:
         seed: Optional[int] = None,
         llm_enabled: bool = True,
         model: Optional[str] = None,
-        provider: str = "openai",
+        provider: str = "ollama",
         timeout: float = 20.0,
     ) -> None:
         domain = "banking" if str(country).upper() in {"US", "IN"} else "generic"
@@ -114,7 +114,7 @@ def generate_safe_banking_notes(
     seed: Optional[int] = None,
     llm_enabled: bool = True,
     model: Optional[str] = None,
-    provider: str = "openai",
+    provider: str = "ollama",
     table_name: str = "records",
     column_name: str = "notes",
     context: Optional[str] = None,

@@ -1,0 +1,870 @@
+{
+  "created_at": "2026-09-11T06:03:47.775133+00:00",
+  "id": "d6cf2108b34b454c8c472134af29d9d3",
+  "state": {
+    "columns": [
+      {
+        "column": "customer_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "-",
+        "role": "PK",
+        "table": "customers",
+        "type": "text"
+      },
+      {
+        "column": "first_name",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "customers",
+        "type": "text"
+      },
+      {
+        "column": "last_name",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "customers",
+        "type": "text"
+      },
+      {
+        "column": "email",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "customers",
+        "type": "text"
+      },
+      {
+        "column": "city",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "customers",
+        "type": "text"
+      },
+      {
+        "column": "credit_score",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "customers",
+        "type": "int"
+      },
+      {
+        "column": "created_at",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "customers",
+        "type": "text"
+      },
+      {
+        "column": "branch_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "-",
+        "role": "PK",
+        "table": "branches",
+        "type": "text"
+      },
+      {
+        "column": "branch_name",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "branches",
+        "type": "text"
+      },
+      {
+        "column": "manager_name",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "branches",
+        "type": "text"
+      },
+      {
+        "column": "city",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "branches",
+        "type": "text"
+      },
+      {
+        "column": "country",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "branches",
+        "type": "text"
+      },
+      {
+        "column": "merchant_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "-",
+        "role": "PK",
+        "table": "merchants",
+        "type": "text"
+      },
+      {
+        "column": "merchant_name",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "merchants",
+        "type": "text"
+      },
+      {
+        "column": "city",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "merchants",
+        "type": "text"
+      },
+      {
+        "column": "account_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "-",
+        "role": "PK",
+        "table": "accounts",
+        "type": "text"
+      },
+      {
+        "column": "customer_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "customers.customer_id",
+        "role": "FK",
+        "table": "accounts",
+        "type": "foreign_key"
+      },
+      {
+        "column": "branch_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "branches.branch_id",
+        "role": "FK",
+        "table": "accounts",
+        "type": "foreign_key"
+      },
+      {
+        "column": "account_type",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "accounts",
+        "type": "text"
+      },
+      {
+        "column": "balance_usd",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "accounts",
+        "type": "float"
+      },
+      {
+        "column": "open_date",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "accounts",
+        "type": "text"
+      },
+      {
+        "column": "card_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "-",
+        "role": "PK",
+        "table": "cards",
+        "type": "text"
+      },
+      {
+        "column": "account_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "accounts.account_id",
+        "role": "FK",
+        "table": "cards",
+        "type": "foreign_key"
+      },
+      {
+        "column": "card_type",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "cards",
+        "type": "text"
+      },
+      {
+        "column": "expiration_date",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "cards",
+        "type": "text"
+      },
+      {
+        "column": "loan_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "-",
+        "role": "PK",
+        "table": "loans",
+        "type": "text"
+      },
+      {
+        "column": "customer_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "customers.customer_id",
+        "role": "FK",
+        "table": "loans",
+        "type": "foreign_key"
+      },
+      {
+        "column": "loan_amount",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "loans",
+        "type": "float"
+      },
+      {
+        "column": "interest_rate",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "loans",
+        "type": "float"
+      },
+      {
+        "column": "start_date",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "loans",
+        "type": "text"
+      },
+      {
+        "column": "transaction_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "-",
+        "role": "PK",
+        "table": "transactions",
+        "type": "text"
+      },
+      {
+        "column": "account_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "accounts.account_id",
+        "role": "FK",
+        "table": "transactions",
+        "type": "foreign_key"
+      },
+      {
+        "column": "merchant_id",
+        "description": "-",
+        "nullable": "no",
+        "references": "merchants.merchant_id",
+        "role": "FK",
+        "table": "transactions",
+        "type": "foreign_key"
+      },
+      {
+        "column": "amount_usd",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "transactions",
+        "type": "float"
+      },
+      {
+        "column": "transaction_date",
+        "description": "-",
+        "nullable": "yes",
+        "references": "-",
+        "role": "-",
+        "table": "transactions",
+        "type": "text"
+      }
+    ],
+    "intent": "Development & testing",
+    "llm_text_columns": [],
+    "metadata": {},
+    "result_job_id": "b2a68ab991304411befb626b9ead2323",
+    "result_session_id": null,
+    "schema": {
+      "banking": null,
+      "columns": {
+        "accounts": [
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "account_id",
+            "nullable": false,
+            "type": "text",
+            "unique": true
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "references": "customers.customer_id"
+            },
+            "name": "customer_id",
+            "nullable": false,
+            "type": "foreign_key",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "references": "branches.branch_id"
+            },
+            "name": "branch_id",
+            "nullable": false,
+            "type": "foreign_key",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "account_type",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "_distribution_is_default": true,
+              "distribution": "normal"
+            },
+            "name": "balance_usd",
+            "nullable": true,
+            "type": "float",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "open_date",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          }
+        ],
+        "branches": [
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "branch_id",
+            "nullable": false,
+            "type": "text",
+            "unique": true
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "branch_name",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "manager_name",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "city",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "country",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          }
+        ],
+        "cards": [
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "card_id",
+            "nullable": false,
+            "type": "text",
+            "unique": true
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "references": "accounts.account_id"
+            },
+            "name": "account_id",
+            "nullable": false,
+            "type": "foreign_key",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "card_type",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "expiration_date",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          }
+        ],
+        "customers": [
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "customer_id",
+            "nullable": false,
+            "type": "text",
+            "unique": true
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "first_name",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "last_name",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "email",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "city",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "_distribution_is_default": true,
+              "distribution": "normal"
+            },
+            "name": "credit_score",
+            "nullable": true,
+            "type": "int",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "created_at",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          }
+        ],
+        "loans": [
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "loan_id",
+            "nullable": false,
+            "type": "text",
+            "unique": true
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "references": "customers.customer_id"
+            },
+            "name": "customer_id",
+            "nullable": false,
+            "type": "foreign_key",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "_distribution_is_default": true,
+              "distribution": "normal"
+            },
+            "name": "loan_amount",
+            "nullable": true,
+            "type": "float",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "_distribution_is_default": true,
+              "distribution": "normal"
+            },
+            "name": "interest_rate",
+            "nullable": true,
+            "type": "float",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "start_date",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          }
+        ],
+        "merchants": [
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "merchant_id",
+            "nullable": false,
+            "type": "text",
+            "unique": true
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "merchant_name",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "city",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          }
+        ],
+        "transactions": [
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "transaction_id",
+            "nullable": false,
+            "type": "text",
+            "unique": true
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "references": "accounts.account_id"
+            },
+            "name": "account_id",
+            "nullable": false,
+            "type": "foreign_key",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "references": "merchants.merchant_id"
+            },
+            "name": "merchant_id",
+            "nullable": false,
+            "type": "foreign_key",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {
+              "_distribution_is_default": true,
+              "distribution": "normal"
+            },
+            "name": "amount_usd",
+            "nullable": true,
+            "type": "float",
+            "unique": false
+          },
+          {
+            "description": null,
+            "distribution_params": {},
+            "name": "transaction_date",
+            "nullable": true,
+            "type": "text",
+            "unique": false
+          }
+        ]
+      },
+      "description": null,
+      "domain": null,
+      "events": [],
+      "name": "schema",
+      "noise_config": null,
+      "outcome_curves": [],
+      "realism": null,
+      "relationships": [
+        {
+          "child_key": "customer_id",
+          "child_table": "accounts",
+          "filters": null,
+          "parent_key": "customer_id",
+          "parent_table": "customers",
+          "temporal_constraint": false
+        },
+        {
+          "child_key": "branch_id",
+          "child_table": "accounts",
+          "filters": null,
+          "parent_key": "branch_id",
+          "parent_table": "branches",
+          "temporal_constraint": false
+        },
+        {
+          "child_key": "account_id",
+          "child_table": "cards",
+          "filters": null,
+          "parent_key": "account_id",
+          "parent_table": "accounts",
+          "temporal_constraint": false
+        },
+        {
+          "child_key": "customer_id",
+          "child_table": "loans",
+          "filters": null,
+          "parent_key": "customer_id",
+          "parent_table": "customers",
+          "temporal_constraint": false
+        },
+        {
+          "child_key": "account_id",
+          "child_table": "transactions",
+          "filters": null,
+          "parent_key": "account_id",
+          "parent_table": "accounts",
+          "temporal_constraint": false
+        },
+        {
+          "child_key": "merchant_id",
+          "child_table": "transactions",
+          "filters": null,
+          "parent_key": "merchant_id",
+          "parent_table": "merchants",
+          "temporal_constraint": false
+        }
+      ],
+      "seed": null,
+      "tables": [
+        {
+          "columns": [],
+          "constraints": [],
+          "correlations": [],
+          "description": null,
+          "inline_data": null,
+          "is_reference": false,
+          "name": "customers",
+          "row_count": 100,
+          "workflow_config": null,
+          "workflow_preset": null
+        },
+        {
+          "columns": [],
+          "constraints": [],
+          "correlations": [],
+          "description": null,
+          "inline_data": null,
+          "is_reference": false,
+          "name": "branches",
+          "row_count": 100,
+          "workflow_config": null,
+          "workflow_preset": null
+        },
+        {
+          "columns": [],
+          "constraints": [],
+          "correlations": [],
+          "description": null,
+          "inline_data": null,
+          "is_reference": false,
+          "name": "merchants",
+          "row_count": 100,
+          "workflow_config": null,
+          "workflow_preset": null
+        },
+        {
+          "columns": [],
+          "constraints": [],
+          "correlations": [],
+          "description": null,
+          "inline_data": null,
+          "is_reference": false,
+          "name": "accounts",
+          "row_count": 100,
+          "workflow_config": null,
+          "workflow_preset": null
+        },
+        {
+          "columns": [],
+          "constraints": [],
+          "correlations": [],
+          "description": null,
+          "inline_data": null,
+          "is_reference": false,
+          "name": "cards",
+          "row_count": 100,
+          "workflow_config": null,
+          "workflow_preset": null
+        },
+        {
+          "columns": [],
+          "constraints": [],
+          "correlations": [],
+          "description": null,
+          "inline_data": null,
+          "is_reference": false,
+          "name": "loans",
+          "row_count": 100,
+          "workflow_config": null,
+          "workflow_preset": null
+        },
+        {
+          "columns": [],
+          "constraints": [],
+          "correlations": [],
+          "description": null,
+          "inline_data": null,
+          "is_reference": false,
+          "name": "transactions",
+          "row_count": 100,
+          "workflow_config": null,
+          "workflow_preset": null
+        }
+      ]
+    },
+    "schema_file": {
+      "filename": "schema.sql",
+      "path": ".staging/api/blobs/8ecf99541bbe4dbc9456d2e55f4df5b9_schema.sql",
+      "size": 1997
+    },
+    "stage": "validation",
+    "summary": {
+      "column_count": 35,
+      "name": "schema",
+      "relationship_count": 6,
+      "table_count": 7,
+      "tables": [
+        {
+          "columns": 7,
+          "description": "People or organizations you do business with",
+          "foreign_keys": "-",
+          "primary_key": "customer_id",
+          "rows": 100,
+          "table": "customers"
+        },
+        {
+          "columns": 5,
+          "description": "Branch / location reference data",
+          "foreign_keys": "-",
+          "primary_key": "branch_id",
+          "rows": 100,
+          "table": "branches"
+        },
+        {
+          "columns": 3,
+          "description": "Merchant / payee reference data",
+          "foreign_keys": "-",
+          "primary_key": "merchant_id",
+          "rows": 100,
+          "table": "merchants"
+        },
+        {
+          "columns": 6,
+          "description": "Accounts owned by customers",
+          "foreign_keys": "customer_id \u2192 customers.customer_id; branch_id \u2192 branches.branch_id",
+          "primary_key": "account_id",
+          "rows": 100,
+          "table": "accounts"
+        },
+        {
+          "columns": 4,
+          "description": "Payment cards linked to accounts",
+          "foreign_keys": "account_id \u2192 accounts.account_id",
+          "primary_key": "card_id",
+          "rows": 100,
+          "table": "cards"
+        },
+        {
+          "columns": 5,
+          "description": "Loan products linked to customers",
+          "foreign_keys": "customer_id \u2192 customers.customer_id",
+          "primary_key": "loan_id",
+          "rows": 100,
+          "table": "loans"
+        },
+        {
+          "columns": 5,
+          "description": "Money-movement events on accounts",
+          "foreign_keys": "account_id \u2192 accounts.account_id; merchant_id \u2192 merchants.merchant_id",
+          "primary_key": "transaction_id",
+          "rows": 100,
+          "table": "transactions"
+        }
+      ]
+    }
+  },
+  "updated_at": "2026-09-11T06:03:52.008590+00:00",
+  "workflow": "schema_twin"
+}

@@ -21,6 +21,10 @@ from synth_platform.application.orchestration.schema.config import PipelineConfi
 from synth_platform.application.orchestration.schema.export import make_zip_from_paths
 from synth_platform.application.orchestration.schema.result import PipelineResult
 from synth_platform.application.orchestration.schema.schema_driven import run_schema_pipeline
+from synth_platform.domain.product_settings import (
+    ProductSettingsReader,
+    read_generation_defaults,
+)
 from synth_platform.engine.inference.schema.schema import Column, RealismConfig, Relationship, SchemaConfig, Table
 from synth_platform.engine.inference.schema.schema_columns import align_unique_int_ranges
 from synth_platform.engine.inference.schema.yaml_schema import load_yaml_schema
@@ -67,7 +71,8 @@ class SchemaModeResult:
 
     @property
     def validation_report(self) -> Dict[str, Any]:
-        return self.pipeline.validation_report or {}
+        report = self.pipeline.validation_report
+        return report if isinstance(report, Mapping) else {}
 
     @property
     def export_paths(self) -> Dict[str, Path]:
@@ -76,15 +81,16 @@ class SchemaModeResult:
     @property
     def hard_checks_passed(self) -> bool:
         report = self.validation_report
+        if not isinstance(report, Mapping) or not report:
+            return False
         if "hard_checks_passed" in report:
-            return bool(report["hard_checks_passed"])
+            return report["hard_checks_passed"] is True
         if "passed" in report:
-            return bool(report["passed"])
+            return report["passed"] is True
         status = report.get("status")
         if isinstance(status, str):
             return status.lower() in {"pass", "passed", "ok", "success"}
-        # Pipeline always embeds structured validation; treat empty as inconclusive-success for preview.
-        return True
+        return False
 
 
 def _normalize_column_type(value: Any) -> str:
@@ -482,19 +488,28 @@ def prepare_schema_for_generation(
 def generate_from_schema(
     schema: SchemaConfig,
     *,
-    row_count: int,
-    seed: int,
+    row_count: int | None = None,
+    seed: int = 42,
     locale: str = "en_US",
-    output_dir: Union[str, Path],
-    export_format: str = "csv",
-    preview_rows: int = 100,
+    output_dir: Union[str, Path] | None = None,
+    export_format: str | None = None,
+    preview_rows: int | None = None,
     llm_text_enabled: bool = False,
     max_llm_rows: int = 50,
+    history: Any | None = None,
+    product_settings: ProductSettingsReader | None = None,
 ) -> SchemaModeResult:
     """Run the canonical schema-driven pipeline for Schema Mode."""
+    defaults = read_generation_defaults(product_settings)
+    resolved_row_count = int(row_count) if row_count is not None else int(defaults["default_record_count"])
+    resolved_export_format = str(export_format or defaults["default_output_format"]).lower()
+    if resolved_export_format not in {"csv", "parquet"}:
+        resolved_export_format = "csv"
+    resolved_output_dir = Path(output_dir) if output_dir is not None else Path(tempfile.mkdtemp(prefix="schema_twin_output_"))
+    resolved_preview_rows = int(preview_rows) if preview_rows is not None else min(100, resolved_row_count)
     prepared = prepare_schema_for_generation(
         schema,
-        row_count=row_count,
+        row_count=resolved_row_count,
         seed=seed,
         locale=locale,
         llm_text_enabled=bool(llm_text_enabled),
@@ -503,19 +518,38 @@ def generate_from_schema(
     config = PipelineConfig(
         generation_mode="schema_driven",
         seed=int(seed),
-        preview_rows=max(1, min(int(preview_rows), int(row_count))),
+        preview_rows=max(1, min(int(resolved_preview_rows), int(resolved_row_count))),
         full_rows=total_rows,
         preview_only=False,
-        export_format=export_format,
-        output_dir=Path(output_dir),
+        export_format=resolved_export_format,
+        output_dir=resolved_output_dir,
         write_reports=True,
-        chunk_size=min(10_000, max(1_000, int(row_count))),
+        chunk_size=min(10_000, max(1_000, int(resolved_row_count))),
         llm_text_enabled=bool(llm_text_enabled),
         llm_full_enabled=bool(llm_text_enabled),
         max_llm_rows=max(1, int(max_llm_rows)),
     )
     pipeline = run_schema_pipeline(prepared, config)
-    return SchemaModeResult(schema=prepared, pipeline=pipeline)
+    result = SchemaModeResult(schema=prepared, pipeline=pipeline)
+    if history is not None:
+        try:
+            history.record_run(
+                workflow_type="schema",
+                project_name=prepared.name or None,
+                status="completed" if result.hard_checks_passed else "failed",
+                validation_status="PASS" if result.hard_checks_passed else "FAIL",
+                validation_passed=result.hard_checks_passed,
+                output_id=str(config.output_dir),
+                metadata={
+                    "generation_mode": pipeline.generation_mode,
+                    "row_counts": pipeline.row_counts,
+                    "export_format": resolved_export_format,
+                    "artifact_dir": str(config.output_dir),
+                },
+            )
+        except Exception:
+            pass
+    return result
 
 
 def package_download(result: SchemaModeResult) -> bytes:

@@ -11,8 +11,11 @@ import json
 import os
 import hashlib
 import string
+import urllib.request
 from typing import Dict, List, Optional, Any
 from pathlib import Path
+
+from synth_platform.domain.privacy.llm_policy import LlmPolicy, LlmPolicyError
 
 
 def _rng_int(rng: Any, low: int, high: int) -> int:
@@ -30,6 +33,29 @@ def _rng_choice(rng: Any, values: List[Any]) -> Any:
         return rng.choice(values)
     import random
     return random.choice(values)
+
+
+class _OllamaValueClient:
+    def __init__(self, *, model: str, host: str, timeout: float = 120.0) -> None:
+        self.model = model
+        self.host = host
+        self.timeout = timeout
+
+    def complete(self, system: str, user: str) -> str:
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "stream": False,
+            "format": "json",
+        }
+        req = urllib.request.Request(
+            f"{self.host.rstrip('/')}/api/chat",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            body = json.loads(resp.read())
+        return body.get("message", {}).get("content", "")
 
 
 def luhn_check_digit(number_without_check: str) -> str:
@@ -673,7 +699,7 @@ class SmartValueGenerator:
     
     def __init__(
         self,
-        provider: str = "groq",
+        provider: str = "ollama",
         api_key: Optional[str] = None,
         cache_dir: Optional[str] = None,
     ):
@@ -685,8 +711,10 @@ class SmartValueGenerator:
             api_key: API key for the provider
             cache_dir: Directory to cache generated pools
         """
-        self.provider = provider
-        self.api_key = api_key or os.environ.get("GROQ_API_KEY")
+        self.provider = LlmPolicy.normalize_provider(provider)
+        self.api_key = api_key or (
+            os.environ.get("OPENAI_API_KEY") if self.provider == "openai" else os.environ.get("GROQ_API_KEY")
+        )
         self.cache_dir = Path(cache_dir) if cache_dir else Path.home() / ".mvp" / "value_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -697,6 +725,8 @@ class SmartValueGenerator:
     def _get_client(self):
         """Lazily initialize LLM client."""
         if self._client is None:
+            provider = LlmPolicy.from_environment().require_provider(self.provider).provider
+            self.provider = provider
             if self.provider == "groq":
                 try:
                     from groq import Groq
@@ -709,6 +739,11 @@ class SmartValueGenerator:
                     self._client = OpenAI(api_key=self.api_key)
                 except ImportError:
                     return None
+            elif self.provider in {"ollama", "local"}:
+                self._client = _OllamaValueClient(
+                    model=os.getenv("OLLAMA_SMART_VALUE_MODEL", os.getenv("MVP_LLM_TEXT_MODEL", "qwen3:8b")),
+                    host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+                )
         return self._client
     
     def detect_domain(self, column_name: str, table_name: str = "") -> Optional[str]:
@@ -777,7 +812,10 @@ class SmartValueGenerator:
         Returns:
             List of generated values
         """
-        client = self._get_client()
+        try:
+            client = self._get_client()
+        except LlmPolicyError:
+            raise
         if client is None:
             # Fall back to curated pools
             return self.FALLBACK_POOLS.get(domain, [])[:size]
@@ -817,6 +855,11 @@ Return ONLY a JSON array of strings, no explanation. Example:
                     temperature=0.7,
                 )
                 content = response.choices[0].message.content.strip()
+            elif self.provider in {"ollama", "local"}:
+                content = client.complete(
+                    "You are a domain expert generating realistic test data. Output only valid JSON.",
+                    prompt,
+                ).strip()
             else:
                 return self.FALLBACK_POOLS.get(domain, [])[:size]
             

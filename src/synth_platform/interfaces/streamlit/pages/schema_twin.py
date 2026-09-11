@@ -11,6 +11,11 @@ from pathlib import Path
 
 import streamlit as st
 
+from synth_platform.application.services.transfer_service import TransferService
+from synth_platform.errors import TransferBlockedError
+from synth_platform.domain.privacy.llm_policy import LlmPolicyError
+from synth_platform.infrastructure.persistence.platform_db import get_platform_db
+from synth_platform.domain.product_settings import read_generation_defaults
 from synth_platform.interfaces.streamlit.components.common.ux import (
     measure_generation,
     mode_outcomes,
@@ -74,6 +79,7 @@ def _progress_steps() -> list[tuple[str, bool]]:
 
 
 render_progress(_progress_steps())
+product_defaults = read_generation_defaults(get_platform_db())
 
 
 def _reset_generation() -> None:
@@ -202,7 +208,7 @@ with st.container(border=True):
             "Rows per table",
             min_value=1,
             max_value=1_000_000,
-            value=100,
+            value=int(product_defaults["default_record_count"]),
             step=10,
             help="Applied to each table in the schema.",
         )
@@ -221,7 +227,13 @@ with st.container(border=True):
             value=42,
             help="Same seed reproduces the same synthetic output.",
         )
-    export_format = st.selectbox("Export format", options=["csv", "parquet"], index=0)
+    schema_export_options = ["csv", "parquet"]
+    default_export = str(product_defaults["default_output_format"])
+    export_format = st.selectbox(
+        "Export format",
+        options=schema_export_options,
+        index=schema_export_options.index(default_export) if default_export in schema_export_options else 0,
+    )
 
     llm_cols = list_llm_text_columns(schema)
     st.markdown("**Text-heavy columns (optional LLM)**")
@@ -263,6 +275,8 @@ with st.container(border=True):
                         export_format=export_format,
                         preview_rows=min(100, int(row_count)),
                         llm_text_enabled=bool(st.session_state.schema_llm_text),
+                        history=get_platform_db(),
+                        product_settings=get_platform_db(),
                     )
                 st.session_state.schema_result = result
                 st.session_state.schema_zip_bytes = package_download(result)
@@ -275,6 +289,16 @@ with st.container(border=True):
                     "rows_per_second": float(getattr(perf, "rows_per_second", 0) or 0) or None,
                 }
                 status.update(label="Synthetic dataset generated", state="complete", expanded=False)
+            except LlmPolicyError as exc:
+                st.session_state.schema_result = None
+                st.session_state.schema_zip_bytes = None
+                st.session_state.schema_run_metrics = None
+                status.update(label="LLM provider blocked", state="error")
+                show_user_error(
+                    "External LLM providers are disabled in air-gapped mode.",
+                    technical=exc,
+                    next_action="Enable local Ollama or set SYNTH_ALLOW_EXTERNAL_LLM=true to use OpenAI/Groq.",
+                )
             except Exception as exc:
                 st.session_state.schema_result = None
                 st.session_state.schema_zip_bytes = None
@@ -371,17 +395,36 @@ with st.container(border=True):
 # ---------------------------------------------------------------------------
 with st.container(border=True):
     step_header(8, "Download", True)
-    zip_bytes = st.session_state.schema_zip_bytes
-    if zip_bytes is None:
-        zip_bytes = package_download(result)
-        st.session_state.schema_zip_bytes = zip_bytes
-    st.download_button(
-        "Download synthetic dataset (ZIP)",
-        data=zip_bytes,
-        file_name=f"{summary.name.replace(' ', '_').lower()}_synthetic.zip",
-        mime="application/zip",
-        width="stretch",
-    )
+    filename = f"{summary.name.replace(' ', '_').lower()}_synthetic.zip"
+    try:
+        zip_bytes = st.session_state.schema_zip_bytes
+        if zip_bytes is None:
+            zip_bytes = package_download(result)
+            st.session_state.schema_zip_bytes = zip_bytes
+        transfer = TransferService(transfer_recorder=get_platform_db()).downloadable_bytes(
+            workflow="schema_twin",
+            output_id=filename,
+            validation_report=result.validation_report,
+            data=zip_bytes,
+            metadata={"file_name": filename, "intent": st.session_state.schema_intent},
+        )
+        st.download_button(
+            "Download synthetic dataset (ZIP)",
+            data=transfer.data,
+            file_name=filename,
+            mime="application/zip",
+            width="stretch",
+        )
+    except TransferBlockedError as exc:
+        st.download_button(
+            "Download synthetic dataset (ZIP)",
+            data=b"",
+            file_name=filename,
+            mime="application/zip",
+            width="stretch",
+            disabled=True,
+        )
+        st.warning(str(exc))
     mode_outcomes(
         [
             "Synthetic relational tables (CSV or Parquet)",

@@ -10,14 +10,25 @@ import pandas as pd
 import pytest
 
 from synth_platform.application.workflows.schema_twin import (
+    SchemaModeResult,
     generate_from_schema,
     load_schema_bytes,
     package_download,
     summarize_schema,
     validation_highlights,
 )
+from synth_platform.application.orchestration.schema.result import PipelineResult
+from synth_platform.engine.inference.schema.schema import Column, SchemaConfig, Table
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "schema" / "schema_twin_minimal.json"
+
+
+def _minimal_schema(name: str) -> SchemaConfig:
+    return SchemaConfig(
+        name=name,
+        tables=[Table(name="records", row_count=1)],
+        columns={"records": [Column(name="id", type="int")]},
+    )
 
 
 def test_load_schema_bytes_from_flexible_json():
@@ -68,6 +79,43 @@ def test_generate_from_schema_reuses_pipeline_and_exports(tmp_path: Path):
     assert "users.csv" in names
     assert "orders.csv" in names
     assert "validation_report.json" in names
+
+
+@pytest.mark.parametrize(
+    "validation_report",
+    [
+        {},
+        {"summary": "validation output unavailable"},
+        {"status": "not_run"},
+        {"status": "unknown"},
+        ["unexpected"],  # type: ignore[list-item]
+    ],
+)
+def test_schema_mode_hard_checks_fail_closed_for_missing_or_malformed_validation(validation_report):
+    result = SchemaModeResult(
+        schema=_minimal_schema("empty_validation"),
+        pipeline=PipelineResult(generation_mode="schema_driven", validation_report=validation_report),
+    )
+
+    assert result.hard_checks_passed is False
+    assert validation_highlights(result)["hard_checks_passed"] is False
+
+
+@pytest.mark.parametrize(
+    "validation_report",
+    [
+        {"hard_checks_passed": True},
+        {"passed": True},
+        {"status": "passed"},
+    ],
+)
+def test_schema_mode_hard_checks_still_accept_explicit_pass_signals(validation_report):
+    result = SchemaModeResult(
+        schema=_minimal_schema("valid_validation"),
+        pipeline=PipelineResult(generation_mode="schema_driven", validation_report=validation_report),
+    )
+
+    assert result.hard_checks_passed is True
 
 
 def test_load_yaml_fixture_via_facade():

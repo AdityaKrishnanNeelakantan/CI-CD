@@ -67,5 +67,9 @@ class PublicationBlockedError(SynthPlatformError):
     """Publication was refused because the release decision was not PASS."""
 
 
+class TransferBlockedError(SynthPlatformError):
+    """A user-facing export/download transfer was refused by validation gates."""
+
+
 class ArtifactSourceKindError(SynthPlatformError):
     """An artifact was used by the wrong source-track operation."""

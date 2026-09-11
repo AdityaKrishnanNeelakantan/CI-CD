@@ -170,6 +170,22 @@ def test_generate_text_column_without_llm_uses_fallback():
     assert result.evidence.llm_used is False
 
 
+def test_generate_text_column_for_ineligible_integer_returns_fallback_values():
+    column = Column(name="retry_count", type="int", nullable=True, distribution_params={"null_probability": 0.0})
+
+    result = generate_text_column(
+        table_name="records",
+        column=column,
+        size=3,
+        config=TextGenerationConfig(llm_enabled=False, is_preview=True, seed=17),
+    )
+
+    assert len(result.values) == 3
+    assert all(isinstance(value, str) and value for value in result.values)
+    assert result.evidence.fallback_count == 3
+    assert any("ineligible" in warning for warning in result.evidence.warnings)
+
+
 def test_unsafe_llm_output_falls_back():
     column = Column(
         name="review_text",

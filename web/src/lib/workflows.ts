@@ -71,5 +71,17 @@ export const workflows: WorkflowConfig[] = [
 ];
 
 export function workflowForType(workflowType?: string | null): WorkflowConfig {
-  return workflows.find((workflow) => workflow.workflowType === workflowType) ?? workflows[0];
+  const aliases: Record<string, WorkflowKey> = {
+    schema: "schema",
+    schema_twin: "schema",
+    database: "database",
+    database_twin: "database",
+    pdf: "document",
+    pdf_twin: "document",
+    document: "document",
+    interaction: "interaction",
+    interaction_twin: "interaction"
+  };
+  const key = workflowType ? aliases[workflowType] : undefined;
+  return workflows.find((workflow) => workflow.key === key || workflow.workflowType === workflowType) ?? workflows[0];
 }

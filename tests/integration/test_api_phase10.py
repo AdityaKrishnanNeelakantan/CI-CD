@@ -92,7 +92,7 @@ def test_health_workflow_sessions_jobs_settings_and_projects(api_client: TestCli
 
     runs = api_client.get(f"/api/projects/{project.id}/runs")
     assert runs.status_code == 200
-    assert runs.json()["data"]["runs"][0]["Output"] == "api-project-output"
+    assert runs.json()["data"]["runs"][0]["result_id"] == "api-project-output"
 
     empty_update = api_client.patch(f"/api/projects/{project.id}", json={})
     assert empty_update.status_code == 422

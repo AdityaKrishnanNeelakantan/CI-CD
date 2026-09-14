@@ -62,7 +62,7 @@ export function ResultsTabs({ result }: { result: ResultBundle }) {
       {tab === "preview" ? <DataTable rows={previewRows} /> : null}
       {tab === "files" ? <DownloadList artifacts={result.artifacts} onDownload={handleDownload} /> : null}
       {tab === "quality" ? <QualitySummary report={result.quality_report} /> : null}
-      {tab === "summary" ? <pre>{JSON.stringify(result.summary ?? result.metadata, null, 2)}</pre> : null}
+      {tab === "summary" ? <WorkflowSummary result={result} /> : null}
       {downloadError ? (
         <div className="alert error" role="alert">
           <AlertCircle size={18} />
@@ -91,11 +91,57 @@ function previewToRows(preview: Record<string, unknown> | null): Array<Record<st
   if (!preview) return [];
   const tables = preview.tables;
   if (tables && typeof tables === "object" && !Array.isArray(tables)) {
-    const first = Object.values(tables as Record<string, unknown>)[0];
-    if (Array.isArray(first)) return first as Array<Record<string, unknown>>;
+    return Object.entries(tables as Record<string, unknown>).flatMap(([table, rows]) =>
+      Array.isArray(rows) ? (rows as Array<Record<string, unknown>>).map((row) => ({ table, ...row })) : []
+    );
   }
+  if (Array.isArray(preview.turns)) return preview.turns as Array<Record<string, unknown>>;
   if (Array.isArray(preview.rows)) return preview.rows as Array<Record<string, unknown>>;
   return [preview];
+}
+
+function WorkflowSummary({ result }: { result: ResultBundle }) {
+  const summary = result.summary ?? {};
+  const workflow = workflowForType(result.workflow_type);
+  const rows = summaryRows(summary);
+  return (
+    <div className="page-stack">
+      <div className="summary-grid">
+        <Metric label="Workflow" value={workflow.title} />
+        <Metric label="Artifacts" value={result.artifacts.length} />
+        <Metric label="Status" value={result.status} />
+        <Metric label="Result" value={result.result_id} />
+      </div>
+      {rows.length ? <DataTable rows={rows} /> : <pre>{JSON.stringify(result.metadata, null, 2)}</pre>}
+    </div>
+  );
+}
+
+function summaryRows(summary: Record<string, unknown>) {
+  const rowCounts = summary.row_counts;
+  if (rowCounts && typeof rowCounts === "object" && !Array.isArray(rowCounts)) {
+    return Object.entries(rowCounts as Record<string, unknown>).map(([table, rows]) => ({ table, rows }));
+  }
+  const outputFormats = summary.output_formats;
+  if (Array.isArray(outputFormats)) {
+    return outputFormats.map((format) => ({ output: String(format) }));
+  }
+  return Object.entries(summary).map(([key, value]) => ({ key, value: formatValue(value) }));
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function formatValue(value: unknown) {
+  if (Array.isArray(value)) return value.join(", ");
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return String(value ?? "-");
 }
 
 function saveBlob(blob: Blob, filename: string) {

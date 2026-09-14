@@ -93,6 +93,77 @@ const resultBundle = {
   updated_at: "2026-09-11T00:00:00Z"
 };
 
+const projectDetail = {
+  project_id: "project-1",
+  id: "project-1",
+  name: "Schema Twin Result",
+  workflow_type: "schema",
+  created_at: "2026-09-11T00:00:00Z",
+  updated_at: "2026-09-11T00:00:00Z",
+  status: "completed",
+  latest_run_id: "run-1",
+  latest_result_id: "result-1",
+  metadata: {},
+  summary: { row_counts: { users: 5 } },
+  quality_report: { status: "passed", passed: true },
+  artifacts: resultBundle.artifacts,
+  runs: [
+    {
+      id: "run-1",
+      run_id: "run-1",
+      project_id: "project-1",
+      workflow_type: "schema",
+      status: "completed",
+      created_at: "2026-09-11T00:00:00Z",
+      updated_at: "2026-09-11T00:00:00Z",
+      completed_at: "2026-09-11T00:00:00Z",
+      result_id: "result-1",
+      job_id: "job-1",
+      validation_status: "passed",
+      validation_passed: true,
+      transfer_status: "not_attempted",
+      transfer_allowed: null,
+      transfer_attempted_at: null,
+      metadata: {}
+    }
+  ]
+};
+
+const runDetail = {
+  ...projectDetail.runs[0],
+  summary: { row_counts: { users: 5 } },
+  quality_report: { status: "passed", passed: true },
+  artifacts: resultBundle.artifacts,
+  input: { schema_file: { filename: "schema.json", size: 100 } },
+  config: { row_count: 5, seed: 7 }
+};
+
+const templates = [
+  {
+    template_id: "ecommerce",
+    name: "E-commerce Platform",
+    description: "Complete e-commerce dataset with products, orders, and reviews",
+    workflow_type: "schema_twin",
+    category: "ecommerce",
+    supported_formats: ["json", "csv", "parquet"],
+    status: "available",
+    can_generate: true,
+    fields: [{ table: "customers", column: "id", type: "int" }],
+    schema_preview: { table_count: 1 }
+  },
+  {
+    template_id: "support-transcript",
+    name: "Support Transcript",
+    description: "Interaction Twin transcript shape for support chats and logs.",
+    workflow_type: "interaction_twin",
+    category: "interaction",
+    supported_formats: ["txt", "log"],
+    status: "coming_soon",
+    can_generate: false,
+    fields: []
+  }
+];
+
 function jsonResponse(data: unknown, status = 200) {
   return Promise.resolve(
     new Response(JSON.stringify(data), {
@@ -199,6 +270,37 @@ function installFetchMock() {
         }
       });
     }
+    if (url === "/api/projects/project-1") {
+      return jsonResponse({ data: { project: projectDetail } });
+    }
+    if (url === "/api/projects/project-1/runs") {
+      return jsonResponse({ data: { runs: projectDetail.runs } });
+    }
+    if (url === "/api/projects/project-1/runs/run-1") {
+      return jsonResponse({ data: { run: runDetail } });
+    }
+    if (url === "/api/templates") {
+      return jsonResponse({ data: { templates } });
+    }
+    if (url === "/api/templates/ecommerce") {
+      return jsonResponse({ data: { template: templates[0] } });
+    }
+    if (url === "/api/schema/sessions/session-1/template" && method === "POST") {
+      return jsonResponse({
+        data: {
+          session,
+          summary: {
+            name: "E-commerce Platform",
+            table_count: 1,
+            column_count: 1,
+            relationship_count: 0,
+            tables: [{ table: "customers", rows: 100 }]
+          },
+          columns: [{ table: "customers", column: "id", type: "int", role: "PK", nullable: "no", references: "-", description: "-" }],
+          llm_text_columns: []
+        }
+      });
+    }
     if (url === "/api/settings" && method === "PUT") {
       return jsonResponse({
         data: {
@@ -281,7 +383,46 @@ describe("Synthetic Data Twin routed app", () => {
     expect(await screen.findByText("Schema Twin Result")).toBeInTheDocument();
     expect(screen.getByText("Schema")).toBeInTheDocument();
     expect(screen.getByText("Passed")).toBeInTheDocument();
-    expect(screen.getByTitle("View")).toHaveAttribute("href", "/results/result-1");
+    expect(screen.getByTitle("View")).toHaveAttribute("href", "/projects/project-1");
+  });
+
+  test("renders project detail with runs and artifacts", async () => {
+    renderApp("/projects/project-1");
+
+    expect(await screen.findByRole("heading", { name: "Schema Twin Result" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Latest Result/i })).toHaveAttribute("href", "/results/result-1");
+    expect(screen.getByText("run-1")).toBeInTheDocument();
+    expect(screen.getByTitle("View run")).toHaveAttribute("href", "/projects/project-1/runs/run-1");
+    expect(screen.getByText("users.csv")).toBeInTheDocument();
+  });
+
+  test("renders run detail with result and config links", async () => {
+    renderApp("/projects/project-1/runs/run-1");
+
+    expect(await screen.findByRole("heading", { name: "run-1" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Result/i })).toHaveAttribute("href", "/results/result-1");
+    expect(screen.getByText(/schema.json/i)).toBeInTheDocument();
+    expect(screen.getByText(/row_count/i)).toBeInTheDocument();
+  });
+
+  test("renders templates from the API", async () => {
+    renderApp("/templates");
+
+    expect(await screen.findByText("E-commerce Platform")).toBeInTheDocument();
+    expect(screen.getByText("Support Transcript")).toBeInTheDocument();
+    expect(screen.getByText("Coming soon")).toBeInTheDocument();
+  });
+
+  test("renders template detail and starts template-backed schema flow", async () => {
+    const user = userEvent.setup();
+    renderApp("/templates/ecommerce");
+
+    expect(await screen.findByRole("heading", { name: "E-commerce Platform" })).toBeInTheDocument();
+    expect(screen.getByText("customers")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Use Template/i }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/schema"));
+    expect(await screen.findByText("E-commerce Platform")).toBeInTheDocument();
   });
 
   test("fetches and saves settings", async () => {

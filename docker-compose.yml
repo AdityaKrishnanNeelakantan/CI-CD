@@ -1,0 +1,13 @@
+services:
+  api:
+    build:
+      context: .
+    image: synthetic-data-twin-api:local
+    ports:
+      - "8000:8000"
+    environment:
+      SP_API_STATE_DIR: /app/.data/api
+      SP_PLATFORM_DB_PATH: /app/.data/platform.db
+      SP_STAGING_ROOT: /app/.data/staging
+    volumes:
+      - ./.data:/app/.data

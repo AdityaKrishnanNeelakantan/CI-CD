@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import Any, Protocol
 
 from synth_platform.application.ports.job_queue import JobHandler
-from synth_platform.interfaces.api.store import ApiStateStore, get_api_store
+
+
+class LocalJobStore(Protocol):
+    def create_job(
+        self,
+        *,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        workflow_type: str | None = None,
+        stage: str = "queued",
+        percent: float = 0.0,
+        message: str = "queued",
+    ) -> dict[str, Any]:
+        ...
+
+    def get_job(self, job_id: str) -> dict[str, Any]:
+        ...
 
 
 class LocalJobRunner:
@@ -17,8 +34,8 @@ class LocalJobRunner:
     deterministic inline run.
     """
 
-    def __init__(self, store: ApiStateStore | None = None, *, threaded: bool = True) -> None:
-        self.store = store or get_api_store()
+    def __init__(self, store: LocalJobStore, *, threaded: bool = True) -> None:
+        self.store = store
         self.threaded = threaded
 
     def submit(

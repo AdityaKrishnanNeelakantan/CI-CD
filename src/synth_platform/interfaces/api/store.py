@@ -34,8 +34,16 @@ class ApiStateStore:
         self.downloads_dir = self.root / "downloads"
         self.blobs_dir = self.root / "blobs"
         self.results_dir = self.root / "results"
+        self.result_bundles_dir = self.root / "result_bundles"
         self._lock = threading.RLock()
-        for path in (self.sessions_dir, self.jobs_dir, self.downloads_dir, self.blobs_dir, self.results_dir):
+        for path in (
+            self.sessions_dir,
+            self.jobs_dir,
+            self.downloads_dir,
+            self.blobs_dir,
+            self.results_dir,
+            self.result_bundles_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
     def create_session(self, workflow: str, state: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -59,15 +67,31 @@ class ApiStateStore:
         self._write_json(self.sessions_dir / f"{record['id']}.json", record)
         return record
 
-    def create_job(self, *, kind: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def create_job(
+        self,
+        *,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        workflow_type: str | None = None,
+        stage: str = "queued",
+        percent: float = 0.0,
+        message: str = "queued",
+    ) -> dict[str, Any]:
         now = utc_now()
         record = {
             "id": uuid.uuid4().hex,
             "kind": kind,
+            "session_id": session_id,
+            "workflow_type": workflow_type,
             "status": "queued",
+            "stage": stage,
+            "percent": float(percent),
+            "message": message,
             "progress": ["queued"],
             "error": None,
             "result": None,
+            "result_id": None,
             "payload": payload or {},
             "created_at": now,
             "updated_at": now,
@@ -94,6 +118,32 @@ class ApiStateStore:
         progress = list(record.get("progress") or [])
         progress.append(message)
         record["progress"] = progress
+        record["message"] = message
+        return self.save_job(record)
+
+    def advance_job(
+        self,
+        job_id: str,
+        *,
+        stage: str,
+        percent: float,
+        message: str,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        record = self.get_job(job_id)
+        progress = list(record.get("progress") or [])
+        if not progress or progress[-1] != message:
+            progress.append(message)
+        record.update(
+            {
+                "stage": stage,
+                "percent": max(0.0, min(100.0, float(percent))),
+                "message": message,
+                "progress": progress,
+            }
+        )
+        if status is not None:
+            record["status"] = status
         return self.save_job(record)
 
     def write_blob(self, name: str, data: bytes) -> Path:
@@ -109,6 +159,46 @@ class ApiStateStore:
 
     def read_result(self, session_id: str) -> dict[str, Any]:
         return self._read_json(self.results_dir / f"{session_id}.json")
+
+    def create_result_bundle(
+        self,
+        *,
+        session_id: str,
+        workflow_type: str,
+        preview: dict[str, Any] | None = None,
+        quality_report: dict[str, Any] | None = None,
+        summary: dict[str, Any] | None = None,
+        artifacts: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+        status: str = "available",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        result_id = uuid.uuid4().hex
+        record = {
+            "id": result_id,
+            "result_id": result_id,
+            "session_id": session_id,
+            "workflow_type": workflow_type,
+            "status": status,
+            "preview": preview,
+            "quality_report": quality_report,
+            "summary": summary,
+            "artifacts": artifacts or [],
+            "metadata": metadata or {},
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._write_json(self.result_bundles_dir / f"{result_id}.json", record)
+        return record
+
+    def get_result_bundle(self, result_id: str) -> dict[str, Any]:
+        return self._read_json(self.result_bundles_dir / f"{result_id}.json")
+
+    def save_result_bundle(self, record: dict[str, Any]) -> dict[str, Any]:
+        record = dict(record)
+        record["updated_at"] = utc_now()
+        self._write_json(self.result_bundles_dir / f"{record['id']}.json", record)
+        return record
 
     def create_download(self, payload: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()

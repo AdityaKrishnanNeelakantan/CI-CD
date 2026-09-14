@@ -24,10 +24,13 @@ export class ApiError extends Error {
 export type SchemaSession = {
   id: string;
   workflow: string;
+  workflow_type: string;
   state: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
+
+export type WorkflowSession = SchemaSession;
 
 export type SchemaSummary = {
   name: string;
@@ -64,11 +67,50 @@ export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type Job = {
   id: string;
+  job_id: string;
+  session_id: string | null;
+  workflow_type: string | null;
   kind: string;
   status: JobStatus;
+  stage: string;
+  percent: number;
+  message: string;
   progress: string[];
   error: null | { code: string; message: string };
+  result_id: string | null;
   result: null | Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ArtifactFileMetadata = {
+  id: string;
+  artifact_id: string | null;
+  name: string;
+  filename: string | null;
+  path: string;
+  media_type: string;
+  content_type: string | null;
+  size: number | null;
+  size_bytes: number | null;
+  role: string | null;
+  kind: string | null;
+  downloadable: boolean;
+  download_url: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ResultBundle = {
+  id: string;
+  result_id: string;
+  session_id: string;
+  workflow_type: string;
+  status: string;
+  preview: Record<string, unknown> | null;
+  quality_report: Record<string, unknown> | null;
+  summary: Record<string, unknown> | null;
+  artifacts: ArtifactFileMetadata[];
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -106,6 +148,56 @@ export type SettingsResponse = {
   privacy_level: string;
 };
 
+export type ProjectSummary = {
+  id: string;
+  name: string;
+  type?: string;
+  workflow_type?: string;
+  workflow_label?: string;
+  records?: string | number;
+  record_count?: number;
+  latest_run_id?: string | null;
+  latest_result_id?: string | null;
+  created_at?: string;
+  created_on?: string;
+  updated_at?: string;
+  status?: string;
+  validation?: string;
+  transfer?: string;
+};
+
+export type ProjectsResponse = {
+  projects: ProjectSummary[];
+};
+
+export type SaveResultResponse = {
+  project_id: string;
+  run_id: string;
+  saved: boolean;
+  project: ProjectSummary;
+};
+
+export type DatabaseConfigureRequest = {
+  row_count?: number;
+  row_counts_by_table?: Record<string, number>;
+  sample_limit?: number;
+  seed?: number;
+  model_type?: string;
+};
+
+export type DocumentConfigureRequest = {
+  seed?: number;
+  extraction_method?: string;
+  llm_text_enabled?: boolean;
+};
+
+export type InteractionConfigureRequest = {
+  interaction_type?: string;
+  output_format?: string;
+  remove_sensitive_information?: boolean;
+  seed?: number;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -129,11 +221,135 @@ export function getSettings(): Promise<SettingsResponse> {
   return requestJson<SettingsResponse>("/api/settings");
 }
 
+export function updateSettings(settings: Partial<SettingsResponse>): Promise<SettingsResponse> {
+  return requestJson<SettingsResponse>("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export function getProjects(workflowType?: string): Promise<ProjectsResponse> {
+  const query = workflowType ? `?workflow_type=${encodeURIComponent(workflowType)}` : "";
+  return requestJson<ProjectsResponse>(`/api/projects${query}`);
+}
+
 export function createSchemaSession(intent: string): Promise<SchemaSession> {
   return requestJson<SchemaSession>("/api/schema/sessions", {
     method: "POST",
     body: JSON.stringify({ intent })
   });
+}
+
+export function createDatabaseSession(intent: string): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>("/api/database/sessions", {
+    method: "POST",
+    body: JSON.stringify({ intent })
+  });
+}
+
+export function getDatabaseSession(sessionId: string): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>(`/api/database/sessions/${sessionId}`);
+}
+
+export function uploadDatabaseSource(sessionId: string, file: File, sourceType = "sqlite"): Promise<WorkflowSession> {
+  const body = new FormData();
+  body.append("source_type", sourceType);
+  body.append("file", file);
+  return requestJson<WorkflowSession>(`/api/database/sessions/${sessionId}/source`, {
+    method: "POST",
+    body
+  });
+}
+
+export function configureDatabaseSession(
+  sessionId: string,
+  config: DatabaseConfigureRequest
+): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>(`/api/database/sessions/${sessionId}/configure`, {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
+export async function startDatabaseGeneration(sessionId: string): Promise<Job> {
+  const data = await requestJson<{ job: Job }>(`/api/database/sessions/${sessionId}/generate`, {
+    method: "POST"
+  });
+  return data.job;
+}
+
+export function createDocumentSession(intent: string): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>("/api/document/sessions", {
+    method: "POST",
+    body: JSON.stringify({ intent })
+  });
+}
+
+export function getDocumentSession(sessionId: string): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>(`/api/document/sessions/${sessionId}`);
+}
+
+export function uploadDocument(sessionId: string, file: File): Promise<WorkflowSession> {
+  const body = new FormData();
+  body.append("file", file);
+  return requestJson<WorkflowSession>(`/api/document/sessions/${sessionId}/upload`, {
+    method: "POST",
+    body
+  });
+}
+
+export function configureDocumentSession(
+  sessionId: string,
+  config: DocumentConfigureRequest
+): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>(`/api/document/sessions/${sessionId}/configure`, {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
+export async function startDocumentGeneration(sessionId: string): Promise<Job> {
+  const data = await requestJson<{ job: Job }>(`/api/document/sessions/${sessionId}/generate`, {
+    method: "POST"
+  });
+  return data.job;
+}
+
+export function createInteractionSession(intent: string): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>("/api/interaction/sessions", {
+    method: "POST",
+    body: JSON.stringify({ intent })
+  });
+}
+
+export function getInteractionSession(sessionId: string): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>(`/api/interaction/sessions/${sessionId}`);
+}
+
+export function uploadInteractionTranscript(sessionId: string, file: File): Promise<WorkflowSession> {
+  const body = new FormData();
+  body.append("file", file);
+  return requestJson<WorkflowSession>(`/api/interaction/sessions/${sessionId}/upload`, {
+    method: "POST",
+    body
+  });
+}
+
+export function configureInteractionSession(
+  sessionId: string,
+  config: InteractionConfigureRequest
+): Promise<WorkflowSession> {
+  return requestJson<WorkflowSession>(`/api/interaction/sessions/${sessionId}/configure`, {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
+export async function startInteractionGeneration(sessionId: string): Promise<Job> {
+  const data = await requestJson<{ job: Job }>(`/api/interaction/sessions/${sessionId}/generate`, {
+    method: "POST"
+  });
+  return data.job;
 }
 
 export function uploadSchemaFile(sessionId: string, file: File): Promise<UploadSchemaResponse> {
@@ -155,6 +371,16 @@ export async function startSchemaGeneration(sessionId: string, config: GenerateC
 
 export function getJob(jobId: string): Promise<Job> {
   return requestJson<Job>(`/api/jobs/${jobId}`);
+}
+
+export function getResult(resultId: string): Promise<ResultBundle> {
+  return requestJson<ResultBundle>(`/api/results/${resultId}`);
+}
+
+export function saveResult(resultId: string): Promise<SaveResultResponse> {
+  return requestJson<SaveResultResponse>(`/api/results/${resultId}/save`, {
+    method: "POST"
+  });
 }
 
 export function getPreview(sessionId: string): Promise<PreviewResponse> {

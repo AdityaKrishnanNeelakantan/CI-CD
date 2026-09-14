@@ -49,8 +49,14 @@ def test_health_workflow_sessions_jobs_settings_and_projects(api_client: TestCli
 
     job = api_client.post("/api/jobs", json={"kind": "manual", "payload": {"check": True}})
     assert job.status_code == 201
-    job_id = job.json()["data"]["id"]
-    assert api_client.get(f"/api/jobs/{job_id}").json()["data"]["status"] == "queued"
+    manual_job = job.json()["data"]
+    job_id = manual_job["id"]
+    assert manual_job["job_id"] == job_id
+    assert manual_job["stage"] == "queued"
+    assert manual_job["percent"] == 0.0
+    fetched_job = api_client.get(f"/api/jobs/{job_id}").json()["data"]
+    assert fetched_job["status"] == "queued"
+    assert fetched_job["message"] == "queued"
 
     updated = api_client.put(
         "/api/settings",
@@ -78,9 +84,19 @@ def test_health_workflow_sessions_jobs_settings_and_projects(api_client: TestCli
     projects = api_client.get("/api/projects")
     assert projects.status_code == 200
     assert any(row["id"] == project.id for row in projects.json()["data"]["projects"])
+
+    renamed = api_client.patch(f"/api/projects/{project.id}", json={"name": "Renamed API project"})
+    assert renamed.status_code == 200
+    assert renamed.json()["data"]["name"] == "Renamed API project"
+    assert PlatformDB().get_project(project.id).name == "Renamed API project"
+
     runs = api_client.get(f"/api/projects/{project.id}/runs")
     assert runs.status_code == 200
     assert runs.json()["data"]["runs"][0]["Output"] == "api-project-output"
+
+    empty_update = api_client.patch(f"/api/projects/{project.id}", json={})
+    assert empty_update.status_code == 422
+    assert empty_update.json()["error"]["code"] == "validation_error"
 
 
 def test_schema_twin_generate_then_download_flow(api_client: TestClient) -> None:
@@ -103,8 +119,53 @@ def test_schema_twin_generate_then_download_flow(api_client: TestClient) -> None
         json={"row_count": 5, "preview_rows": 3, "seed": 7, "export_format": "csv"},
     )
     assert generate.status_code == 202
-    job = _wait_for_job(api_client, generate.json()["data"]["job"]["id"])
+    initial_job = generate.json()["data"]["job"]
+    assert initial_job["job_id"] == initial_job["id"]
+    assert initial_job["session_id"] == session_id
+    assert initial_job["workflow_type"] == "schema_twin"
+    assert initial_job["stage"] == "queued"
+    assert initial_job["percent"] == 0.0
+    job = _wait_for_job(api_client, initial_job["id"])
     assert job["status"] == "succeeded"
+    assert job["job_id"] == job["id"]
+    assert job["session_id"] == session_id
+    assert job["workflow_type"] == "schema_twin"
+    assert job["stage"] == "complete"
+    assert job["percent"] == 100.0
+    assert job["message"] == "Generation complete"
+    assert job["result_id"]
+    assert job["result"] == {"session_id": session_id, "result_id": job["result_id"]}
+
+    result_bundle = api_client.get(f"/api/results/{job['result_id']}")
+    assert result_bundle.status_code == 200
+    result_data = result_bundle.json()["data"]
+    assert result_data["result_id"] == job["result_id"]
+    assert result_data["session_id"] == session_id
+    assert result_data["workflow_type"] == "schema_twin"
+    assert result_data["preview"]["row_counts"] == {"users": 5, "orders": 5}
+    assert result_data["quality_report"]["passed"] is True
+    assert {artifact["role"] for artifact in result_data["artifacts"]} >= {"download", "table_export"}
+    downloadable = [artifact for artifact in result_data["artifacts"] if artifact["downloadable"]]
+    assert downloadable
+    assert all(artifact["download_url"] for artifact in downloadable)
+
+    artifact_download = api_client.get(downloadable[0]["download_url"])
+    assert artifact_download.status_code == 200
+    assert artifact_download.content
+
+    saved = api_client.post(f"/api/results/{job['result_id']}/save")
+    assert saved.status_code == 201
+    saved_data = saved.json()["data"]
+    assert saved_data["project_id"]
+    assert saved_data["run_id"]
+    assert saved_data["saved"] is True
+
+    saved_again = api_client.post(f"/api/results/{job['result_id']}/save")
+    assert saved_again.status_code == 201
+    saved_again_data = saved_again.json()["data"]
+    assert saved_again_data["project_id"] == saved_data["project_id"]
+    assert saved_again_data["run_id"] == saved_data["run_id"]
+    assert saved_again_data["saved"] is False
 
     preview = api_client.get(f"/api/schema/sessions/{session_id}/preview")
     assert preview.status_code == 200
@@ -124,6 +185,35 @@ def test_schema_twin_generate_then_download_flow(api_client: TestClient) -> None
 
     runs = PlatformDB().list_runs(workflow_type="schema")
     assert any(run.transfer_status == "success" and run.transfer_allowed is True for run in runs)
+
+
+def test_result_artifact_download_returns_410_for_missing_file(api_client: TestClient, tmp_path: Path) -> None:
+    store = ApiStateStore()
+    bundle = store.create_result_bundle(
+        session_id="session-missing-artifact",
+        workflow_type="schema_twin",
+        artifacts=[
+            {
+                "id": "missing-report",
+                "name": "missing-report.json",
+                "path": str(tmp_path / "missing-report.json"),
+                "media_type": "application/json",
+                "size": None,
+                "role": "report",
+                "metadata": {},
+            }
+        ],
+    )
+
+    result = api_client.get(f"/api/results/{bundle['id']}")
+    assert result.status_code == 200
+    artifact = result.json()["data"]["artifacts"][0]
+    assert artifact["downloadable"] is False
+    assert artifact["download_url"] is None
+
+    response = api_client.get(f"/api/results/{bundle['id']}/artifacts/missing-report/download")
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "artifact_unavailable"
 
 
 def test_schema_upload_rejects_invalid_payload(api_client: TestClient) -> None:

@@ -32,6 +32,7 @@ class ProjectSummary:
     validation: str
     transfer: str
     latest_run_id: str | None
+    latest_result_id: str | None
 
 
 def read_product_settings(db: PlatformDB) -> dict[str, Any]:
@@ -93,6 +94,7 @@ def _project_summary(project: ProjectRecord, latest_run: RunRecord | None) -> Pr
         validation=_validation_label(latest_run),
         transfer=_transfer_label(latest_run),
         latest_run_id=latest_run.id if latest_run else None,
+        latest_result_id=latest_run.output_id if latest_run else None,
     )
 
 

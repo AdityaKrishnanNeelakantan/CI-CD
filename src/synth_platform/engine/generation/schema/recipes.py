@@ -38,7 +38,7 @@ class RecipeSpec(BaseModel):
         return SchemaConfig(**self.schema_config)
 
 
-class RecipeManifest(BaseModel):  # renamed from RunManifest during Phase 7 consolidation to avoid a name collision with the Database Twin run-manifest type (unrelated class, same name - see TECHNICAL_DEBT.md H1)
+class RecipeManifest(BaseModel):
     """Machine-readable metadata for a recipe run."""
 
     recipe_name: str

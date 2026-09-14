@@ -1,4 +1,4 @@
-"""My Projects — local project and run history backed by platform.db."""
+"""My Twin — local project and run history backed by platform.db."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from synth_platform.interfaces.streamlit.project_ui import (
     project_table_rows,
 )
 
-st.title("My Projects")
+st.title("My Twin")
 st.caption("Saved local project history from generation and validation runs on this machine.")
 
 db = get_platform_db()

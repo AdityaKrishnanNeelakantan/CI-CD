@@ -10,7 +10,7 @@ const guideCards = [
   },
   {
     title: "Database Twin",
-    body: "Use SQLite uploads for the routed workflow. CSV, Parquet, and PostgreSQL are staged for a later connection flow.",
+    body: "Use SQLite uploads for the routed workflow. Additional database connectors are staged for a later connection flow.",
     meta: "SQLite active, database connectors queued",
     Icon: Database
   },
@@ -31,10 +31,6 @@ export function PlaceholderPage({ title }: { title: string }) {
           <p className="eyebrow">{title}</p>
           <h2>{title}</h2>
         </div>
-        <div className="status-chip">
-          {isTemplates ? <Wrench size={15} /> : <BookOpen size={15} />}
-          <span>{isTemplates ? "Planned" : "Ready"}</span>
-        </div>
       </div>
       {isTemplates ? (
         <div className="resource-grid single">
@@ -44,7 +40,7 @@ export function PlaceholderPage({ title }: { title: string }) {
             </div>
             <div>
               <h3>Template-backed generation</h3>
-              <p>Reusable templates are coming soon. Today, Schema Twin supports schema file upload as the production path.</p>
+              <p>Reusable template generation is available where supported. Schema Twin also supports schema file upload as the production path.</p>
             </div>
             <Link className="secondary" to="/schema">
               Open Schema Twin

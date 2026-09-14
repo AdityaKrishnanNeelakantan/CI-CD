@@ -5,20 +5,8 @@ Correctly distinguishes acyclic schemas (safe to order), self-references
 strategy is configured). This replaces the legacy 'silently append cyclic
 tables' behavior the audit flagged.
 
-Phase 7 reconciliation note (master_repo consolidation): a second,
-independently-written Tarjan-SCC implementation exists at
-the Database Twin relational schema graph. That one
-uses an iterative Tarjan (avoids Python's recursion limit on deep linear
-FK chains, a real robustness edge this module doesn't have) and actually
-SUPPORTS multi-table cycles end-to-end via two-pass SCC generation,
-rather than rejecting them as "unsupported" the way this module's
-`unsupported_cycles` does. THIS module's advantage is its typed, frozen
-GraphPlan with explicit topological levels (useful for visualizing/
-parallelizing generation waves) and its use of a real `ForeignKey` domain
-type instead of loose dicts. Unifying the two (borrowing this module's
-typed level-output shape while keeping the other's cyclic-schema support
-and iterative-Tarjan safety) is deliberately left for Phase 8's
-architecture refactor, not done here - Phase 7 is relocation only.
+This module returns a typed, frozen `GraphPlan` with explicit
+topological levels for visualization and parallel generation planning.
 """
 from __future__ import annotations
 

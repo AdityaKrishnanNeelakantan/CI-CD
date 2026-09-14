@@ -2167,7 +2167,7 @@ class DataSimulator:
         buffered: Dict[str, pd.DataFrame] = {}
         streamed: list = []   # tables already yielded (order record for phase 3)
 
-        # Phase 1 — generate in dependency order
+        # Pass 1: generate in dependency order.
         for table_name in sorted_tables:
             if table_name in cascade_tables:
                 # Buffer: collect all batches for cascade pass
@@ -2182,11 +2182,11 @@ class DataSimulator:
                     yield table_name, batch
                 streamed.append(table_name)
 
-        # Phase 2 — apply cascades to buffered tables
+        # Pass 2: apply cascades to buffered tables.
         for event in cascade_events:
             self.propagate_event_cascade(buffered, event)
 
-        # Phase 3 — yield buffered tables in original dependency order
+        # Pass 3: yield buffered tables in original dependency order.
         for table_name in sorted_tables:
             if table_name in buffered:
                 yield table_name, buffered[table_name]

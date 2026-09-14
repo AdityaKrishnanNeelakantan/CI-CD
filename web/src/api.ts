@@ -237,7 +237,6 @@ export type DatabaseConfigureRequest = {
   row_counts_by_table?: Record<string, number>;
   sample_limit?: number;
   seed?: number;
-  model_type?: string;
 };
 
 export type DocumentConfigureRequest = {

@@ -20,7 +20,7 @@ Synthetic Data Twin is a local-first Python and React platform for generating pr
 - Natural-language schema generation is not implemented.
 - Template-backed generation is currently supported for built-in Schema Twin templates only.
 - Runtime state and artifact metadata are local filesystem/SQLite files by default.
-- The backend Docker image is the production-oriented artifact; the React frontend is not dockerized in this phase.
+- The backend Docker image is the production-oriented artifact; the React frontend is built separately with Vite.
 - No production authentication, RBAC, external queue, cloud storage, or deployment hardening is included yet.
 - Jobs run through the local inline job runner and are polled by the frontend.
 
@@ -42,7 +42,7 @@ web/
   src/pages/        React routed pages
   src/lib/          Frontend workflow metadata/helpers
 tests/              Unit, integration, contract, security, and e2e tests
-docs/               Architecture, migration, workflow, and phase notes
+docs/               Architecture, workflow, privacy, validation, and CI/CD notes
 .github/workflows/ GitHub Actions CI and release workflows
 ```
 
@@ -74,6 +74,15 @@ Common backend variables:
 - `SP_STAGING_ROOT`: default local staging root. Default: `.staging`.
 - `SP_APPROVED_OUTPUT_ROOT`: default approved output root. Default: `output`.
 - `SP_SEED`, `SP_MAX_ROWS`, `SP_HOLDOUT`: generation defaults used by backend settings.
+
+Local demo defaults, including the Ollama host/model, live in `src/synth_platform/settings.py`.
+
+Ollama defaults for local LLM-backed text generation:
+
+- Host: `http://localhost:11434`
+- Model: `qwen3.5:9b`
+
+To use a different local model without editing code, set `OLLAMA_MODEL`.
 
 Frontend:
 
@@ -194,7 +203,7 @@ The release workflow remains tag-based and publishes package/release assets.
 ## Troubleshooting
 
 - **Templates API unavailable**: restart the backend from this checkout. An older process on port `8000` may be serving pre-template routes.
-- **Project detail fails to load**: make sure the backend includes Phase 5+ routes and is running from this repository with `uv run`.
+- **Project detail fails to load**: make sure the backend is running from this repository with `uv run`.
 - **Frontend cannot reach backend**: confirm `curl http://127.0.0.1:8000/api/health` works, then restart `npm run dev`.
 - **Docker port already in use**: stop the local backend or run Docker with a different host port, for example `-p 8001:8000`.
 - **Generated data appears in git status**: local runtime state belongs under `.staging/`, `.data/`, or `output/`, all of which are ignored.

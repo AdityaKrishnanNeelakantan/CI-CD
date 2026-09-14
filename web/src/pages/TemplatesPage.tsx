@@ -42,7 +42,7 @@ export function TemplatesPage() {
                   <div>
                     <h3>{template.name}</h3>
                     <p>{template.description}</p>
-                    <span>{template.status === "available" ? "Available" : "Coming soon"}</span>
+                    <span>{template.status === "available" ? "Available" : "Unavailable"}</span>
                   </div>
                   {template.can_generate ? <Layers className="resource-check" size={20} /> : <Lock className="resource-check" size={20} />}
                 </Link>

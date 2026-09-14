@@ -93,14 +93,6 @@ De-identification is an optional sibling operation after template construction; 
 
 Database and PDF stages use `RunManifest`-based run directories and named stage outputs. This gives stage-level lineage instead of one opaque pipeline result. The workflow documentation lists the important artifact filenames and their producer/consumer relationships.
 
-## Terminology alignment
-
-Some design documents use architecture terms such as `SeedReader`, `CategorySampler`, `Results page`, or `TextColumn` where the code intentionally uses more specific workflow names. The canonical mapping is maintained in `docs/terminology-map.md`; those mapped terms are not missing components unless product scope changes.
-
-## Legacy isolation
-
-Previous/optional implementation lineages and historical reports are kept under `archive/legacy/`. They are not importable product packages under `src/` and should not be treated as active runtime ownership. The original-to-canonical module mapping is recorded in `docs/module-migration-map.json`.
-
 ## Adding a feature
 
 1. Determine whether it is a domain concept, reusable engine capability, application orchestration concern, external integration, or UI concern.

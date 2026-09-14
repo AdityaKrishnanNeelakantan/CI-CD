@@ -56,12 +56,12 @@ export function TemplateDetailPage() {
         </div>
         <p className="muted">{template.description}</p>
         <div className="summary-grid">
-          <Metric label="Status" value={template.status === "available" ? "Available" : "Coming soon"} />
+          <Metric label="Status" value={template.status === "available" ? "Available" : "Unavailable"} />
           <Metric label="Category" value={template.category} />
           <Metric label="Formats" value={template.supported_formats.join(", ")} />
           <Metric label="Fields" value={template.fields.length} />
         </div>
-        {!template.can_generate ? <div className="empty">Template generation coming soon</div> : null}
+        {!template.can_generate ? <div className="empty">Template generation is unavailable for this item.</div> : null}
         {useTemplate.isError ? <div className="alert error">Template flow could not be started.</div> : null}
       </section>
 

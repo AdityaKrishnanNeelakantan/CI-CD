@@ -48,7 +48,7 @@ export function ResultsTabs({ result }: { result: ResultBundle }) {
           </Link>
           <button className="secondary" disabled={saveMutation.isPending || saveMutation.isSuccess} onClick={() => saveMutation.mutate()}>
             <Save size={17} />
-            Save to My Projects
+            Save to My Twin
           </button>
         </div>
       </div>
@@ -73,7 +73,7 @@ export function ResultsTabs({ result }: { result: ResultBundle }) {
         <div className="alert success" role="status">
           <CheckCircle2 size={18} />
           <span>
-            Saved to My Projects. <Link to="/projects">View projects</Link>
+            Saved to My Twin. <Link to="/projects">View twins</Link>
           </span>
         </div>
       ) : null}

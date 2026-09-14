@@ -156,9 +156,9 @@ h3 {
 }
 
 .brand-mark {
-  background: linear-gradient(180deg, #3296ff, #0567d5);
+  background: linear-gradient(135deg, var(--schema), var(--database));
   border-radius: 8px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22), 0 10px 24px rgba(8, 120, 244, 0.25);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24), 0 10px 24px rgba(8, 120, 244, 0.25);
   color: #ffffff;
   flex: 0 0 auto;
   height: 40px;
@@ -338,6 +338,12 @@ h3 {
   width: 100%;
 }
 
+.home-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - 138px);
+}
+
 .home-hero {
   background:
     linear-gradient(135deg, rgba(8, 120, 244, 0.08), transparent 38%),
@@ -346,9 +352,15 @@ h3 {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   display: grid;
-  gap: 24px;
-  grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
+  gap: 12px;
+  min-height: 150px;
   padding: 24px;
+}
+
+.home-hero-copy {
+  align-content: start;
+  display: grid;
+  gap: 8px;
 }
 
 .home-hero h2 {
@@ -394,7 +406,26 @@ label {
 .chat-entry div {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
+}
+
+.home-chat-entry {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  margin-top: auto;
+  padding: 14px;
+  width: 100%;
+}
+
+.attachment-button input {
+  height: 1px;
+  min-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  width: 1px;
 }
 
 input,

@@ -2,8 +2,7 @@
 
 Talks to a locally-running Ollama daemon (default http://localhost:11434). No
 data leaves the host — this is the local-LLM deployment the architecture calls
-for. Recommended local model as of 2026: qwen3:8b (Apache 2.0) or gpt-oss:20b;
-the model name is configuration, not code.
+for.
 """
 from __future__ import annotations
 
@@ -11,13 +10,15 @@ import json
 import urllib.request
 
 from synth_platform.errors import ExtractionError
+from synth_platform.settings import Settings
 
 
 class OllamaChatModel:
-    def __init__(self, model: str = "qwen3:8b",
-                 host: str = "http://localhost:11434", timeout: float = 120.0):
-        self.name = model
-        self._url = f"{host.rstrip('/')}/api/chat"
+    def __init__(self, model: str | None = None,
+                 host: str | None = None, timeout: float = 120.0):
+        settings = Settings.from_env()
+        self.name = model or settings.ollama_model
+        self._url = f"{(host or settings.ollama_host).rstrip('/')}/api/chat"
         self._timeout = timeout
 
     def complete(self, system: str, user: str, *, json_only: bool = True) -> str:

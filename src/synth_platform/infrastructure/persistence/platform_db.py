@@ -97,7 +97,7 @@ class RunRecord:
 
 
 class PlatformDB:
-    """Small sqlite3-backed data-access layer for Phase 5 persistence."""
+    """Small sqlite3-backed data-access layer for local persistence."""
 
     def __init__(self, path: str | Path | None = None, *, settings: Settings | None = None):
         self.path = Path(path) if path is not None else platform_db_path(settings)

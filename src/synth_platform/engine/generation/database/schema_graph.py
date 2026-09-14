@@ -20,20 +20,9 @@ within each SCC (sample non-FK values first, then resolve internal FKs).
 The Tarjan implementation is iterative (explicit stack) to avoid Python's
 recursion limit on deep linear FK chains.
 
-Phase 7 reconciliation note (master_repo consolidation): a second,
-independently-written Tarjan-SCC implementation exists at
-src/synth_platform/domain/relational/dag.py (Lineage D). That one returns
-a typed, frozen GraphPlan with explicit topological LEVELS (useful for
-visualizing/parallelizing generation waves) and uses a recursive Tarjan,
-but treats any multi-table cycle as unsupported/rejected rather than
-resolving it. THIS module is the one that actually supports cyclic
-schemas end-to-end (via two-pass SCC generation in
-src/relational/relational_generator.py) and uses an iterative Tarjan
-specifically to avoid the recursion-depth failure mode the other
-implementation has on deep chains. Unifying the two (borrowing D's typed
-level-output shape while keeping this module's cyclic-schema support and
-iterative-Tarjan safety) is deliberately left for Phase 8's architecture
-refactor, not done here - Phase 7 is relocation only, not a redesign.
+This module supports cyclic schemas end-to-end via two-pass SCC
+generation and uses iterative Tarjan traversal to avoid recursion-depth
+failures on deep chains.
 """
 
 from __future__ import annotations

@@ -134,10 +134,10 @@ export function SchemaTwinPage() {
           <UploadPanel accept=".json,.yaml,.yml,.sql,.csv,.xlsx" busy={uploadMutation.isPending} label="Schema file" onFile={handleFile}>
             <label>
               Natural language schema description
-              <textarea disabled placeholder="Coming in Phase 4" />
+              <textarea disabled placeholder="Use a schema file to continue" />
             </label>
             <button className="secondary" disabled type="button">
-              Template generation starts from the Templates page
+              Template generation is available from saved templates
             </button>
           </UploadPanel>
           {summary ? <Summary summary={summary} /> : null}

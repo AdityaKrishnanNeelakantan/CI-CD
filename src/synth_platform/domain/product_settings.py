@@ -65,6 +65,6 @@ def read_generation_defaults(settings: ProductSettingsReader | None = None) -> d
 
 
 def privacy_level_removes_sensitive_information(privacy_level: str) -> bool:
-    """Conservative Phase 9 privacy mapping for transcript generation."""
+    """Conservative privacy mapping for transcript generation."""
 
     return str(privacy_level or "standard").lower() in {"standard", "restricted", "strict"}

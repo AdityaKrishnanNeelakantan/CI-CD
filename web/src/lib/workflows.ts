@@ -39,9 +39,9 @@ export const workflows: WorkflowConfig[] = [
     key: "database",
     workflowType: "database_twin",
     title: "Database Twin",
-    description: "Inspect a database or tabular sample, configure privacy controls, then generate a twin.",
+    description: "Inspect a database source, configure privacy controls, then generate a twin.",
     route: "/database",
-    formats: "SQLite, CSV, Parquet",
+    formats: "SQLite",
     steps: ["Connect", "Configure", "Generate", "Results"],
     Icon: Database,
     accent: "database"

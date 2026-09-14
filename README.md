@@ -198,19 +198,7 @@ GitHub Actions runs on pull requests, pushes to `main`/`master`, and manual disp
 
 The CI Docker job tags images as `synthetic-data-twin-api:ci` and `synthetic-data-twin-api:${{ github.sha }}`. It does not push to a registry. Future registry publishing should be added only after secrets, registry naming, and deployment ownership are decided.
 
-The release workflow remains tag-based and publishes package/release assets.
-
-## Troubleshooting
-
-- **Templates API unavailable**: restart the backend from this checkout. An older process on port `8000` may be serving pre-template routes.
-- **Project detail fails to load**: make sure the backend is running from this repository with `uv run`.
-- **Frontend cannot reach backend**: confirm `curl http://127.0.0.1:8000/api/health` works, then restart `npm run dev`.
-- **Docker port already in use**: stop the local backend or run Docker with a different host port, for example `-p 8001:8000`.
-- **Generated data appears in git status**: local runtime state belongs under `.staging/`, `.data/`, or `output/`, all of which are ignored.
-
-## Cleanup Notes
-
-Generated caches, local staging data, local SQLite runtime files, frontend build output, and virtualenv folders are intentionally ignored. Required source, tests, docs, package config, frontend lock files, Docker config, and CI config should remain tracked.
+The release workflow remains tag-based and publishes package/release assets.å
 
 ## Development Workflow
 

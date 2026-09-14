@@ -125,7 +125,7 @@ class RuleBasedWorkflowIntentClassifier:
 
         record_count = _extract_record_count(text)
         if record_count:
-            scores["schema_twin"] += 0.12
+            scores["schema_twin"] += 0.62
             reasons["schema_twin"].append("Prompt includes a target record count")
 
         if not scores:
@@ -185,9 +185,11 @@ class RuleBasedWorkflowIntentClassifier:
             detected_input=DetectedWorkflowInput(kind=detected_kind, file_type=detected_file_type, source=detected_source),
             prefill=WorkflowIntentPrefill(
                 record_count=record_count,
+                privacy_level=_privacy_level(text),
                 output_format=_output_format(text),
                 interaction_type=_interaction_type(text),
                 document_type=_document_type(text),
+                other=_supported_options(text),
             ),
             alternatives=alternatives,
             warnings=warnings,
@@ -248,7 +250,7 @@ def _sniff_preview(preview: str) -> tuple[str, str] | None:
 
 
 def _extract_record_count(text: str) -> int | None:
-    match = re.search(r"\b(\d{1,3}(?:,\d{3})+|\d{2,7})\b(?=[\w\s-]{0,80}\b(?:records|rows)\b)", text)
+    match = re.search(r"\b(\d{1,3}(?:,\d{3})+|\d{2,7})\b(?=[\w\s-]{0,80}\b(?:records|rows|data|items|examples)\b)", text)
     if not match:
         return None
     value = int(match.group(1).replace(",", ""))
@@ -262,6 +264,16 @@ def _output_format(text: str) -> str | None:
         return "csv"
     if "json" in text:
         return "json"
+    if "synthetic log" in text or "logs" in text:
+        return "logs"
+    return None
+
+
+def _privacy_level(text: str) -> str | None:
+    if any(term in text for term in ("strict privacy", "high privacy", "maximum privacy", "hipaa", "de-identify", "deidentify", "anonymize")):
+        return "strict"
+    if any(term in text for term in ("standard privacy", "default privacy")):
+        return "standard"
     return None
 
 
@@ -282,6 +294,81 @@ def _document_type(text: str) -> str | None:
         return "report"
     if "pdf" in text or "document" in text:
         return "document"
+    return None
+
+
+def _supported_options(text: str) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    locale = _locale(text)
+    seed = _seed(text)
+    sample_limit = _sample_limit(text)
+    extraction_method = _extraction_method(text)
+    if locale:
+        options["locale"] = locale
+    if seed is not None:
+        options["seed"] = seed
+    if sample_limit is not None:
+        options["sample_limit"] = sample_limit
+    if extraction_method:
+        options["extraction_method"] = extraction_method
+    if any(term in text for term in ("llm text", "use llm", "llm enabled", "richer text", "realistic text")):
+        options["llm_text_enabled"] = True
+    if any(term in text for term in ("no llm", "without llm", "disable llm")):
+        options["llm_text_enabled"] = False
+    disables_redaction = any(term in text for term in ("keep sensitive", "do not remove sensitive", "without redaction", "no redaction"))
+    enables_redaction = any(term in text for term in ("remove sensitive", "redact", "anonymize", "de-identify", "deidentify"))
+    if disables_redaction:
+        options["remove_sensitive_information"] = False
+    elif enables_redaction:
+        options["remove_sensitive_information"] = True
+    return options
+
+
+def _locale(text: str) -> str | None:
+    aliases = {
+        "india": "en_IN",
+        "indian": "en_IN",
+        "uk": "en_GB",
+        "british": "en_GB",
+        "united kingdom": "en_GB",
+        "germany": "de_DE",
+        "german": "de_DE",
+        "france": "fr_FR",
+        "french": "fr_FR",
+        "us": "en_US",
+        "usa": "en_US",
+        "american": "en_US",
+    }
+    match = re.search(r"\b(en_US|en_GB|en_IN|de_DE|fr_FR)\b", text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    for phrase, locale in aliases.items():
+        if phrase in text:
+            return locale
+    return None
+
+
+def _seed(text: str) -> int | None:
+    match = re.search(r"\bseed(?:\s+is|\s*=|:)?\s*(\d{1,9})\b", text)
+    if not match:
+        return None
+    return max(0, min(int(match.group(1)), 999_999_999))
+
+
+def _sample_limit(text: str) -> int | None:
+    match = re.search(r"\bsample(?:\s+limit|\s+size)?(?:\s+is|\s*=|:)?\s*(\d{1,7})\b", text)
+    if not match:
+        return None
+    return max(1, min(int(match.group(1)), 1_000_000))
+
+
+def _extraction_method(text: str) -> str | None:
+    if "docling" in text:
+        return "docling"
+    if "ocr" in text:
+        return "ocr"
+    if "native pdf" in text or "native extraction" in text:
+        return "native"
     return None
 
 

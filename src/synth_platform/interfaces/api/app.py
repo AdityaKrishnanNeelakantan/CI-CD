@@ -29,13 +29,16 @@ from synth_platform.engine.generation.schema.templates.library import list_templ
 from synth_platform.errors import TransferBlockedError
 from synth_platform.infrastructure.persistence.platform_db import PlatformDB, ProjectRecord, RunRecord, get_platform_db
 from synth_platform.infrastructure.persistence.project_views import (
+    WORKFLOW_LABELS,
     load_project_summaries,
     read_product_settings,
+    run_result_id as recorded_result_id,
     write_product_settings,
 )
 from synth_platform.infrastructure.jobs.inline import LocalJobRunner
 from synth_platform.interfaces.api.contracts import GenerationJob, ResultBundle, WorkflowSession
 from synth_platform.interfaces.api.routes.database import router as database_router
+from synth_platform.interfaces.api.routes.demo import router as demo_router
 from synth_platform.interfaces.api.routes.document import router as document_router
 from synth_platform.interfaces.api.routes.intent import router as intent_router
 from synth_platform.interfaces.api.routes.interaction import router as interaction_router
@@ -100,6 +103,7 @@ def create_app() -> FastAPI:
     )
     _register_error_handlers(app)
     app.include_router(database_router)
+    app.include_router(demo_router)
     app.include_router(document_router)
     app.include_router(intent_router)
     app.include_router(interaction_router)
@@ -239,6 +243,8 @@ def _register_routes(app: FastAPI) -> None:
                 "session_id": bundle.get("session_id"),
                 "job_id": metadata.get("job_id"),
                 "row_counts": summary.get("row_counts"),
+                "requested_row_count": summary.get("requested_row_count"),
+                "row_count_mode": summary.get("row_count_mode"),
                 "turn_count": summary.get("synthetic_turn_count"),
                 "artifact_count": len(bundle.get("artifacts") or []),
                 "input": _public_session_input(session_state),
@@ -285,18 +291,21 @@ def _register_routes(app: FastAPI) -> None:
     async def upload_schema_file(session_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
         store = get_api_store()
         record = _get_schema_session(session_id)
+        filename = file.filename or "schema.json"
+        if Path(filename).suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
+            _raise(400, "wrong_workflow", "SQLite database files must be uploaded through Database Twin.")
         raw = await file.read()
         try:
-            schema = load_schema_bytes(raw, file.filename or "schema.json")
+            schema = load_schema_bytes(raw, filename)
         except Exception as exc:
             _raise(400, "schema_parse_error", str(exc))
-        schema_blob = store.write_blob(file.filename or "schema.json", raw)
+        schema_blob = store.write_blob(filename, raw)
         summary = summarize_schema(schema)
         state = dict(record.get("state") or {})
         state.update(
             {
                 "stage": "schema_review",
-                "schema_file": {"filename": file.filename, "path": str(schema_blob), "size": len(raw)},
+                "schema_file": {"filename": filename, "path": str(schema_blob), "size": len(raw)},
                 "schema": schema.model_dump(mode="json"),
                 "summary": summary.__dict__,
                 "columns": schema_column_details(schema),
@@ -406,8 +415,18 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/api/projects")
     def get_projects(workflow_type: str | None = None) -> dict[str, Any]:
-        summaries = load_project_summaries(get_platform_db(), workflow_type=workflow_type)
-        return _ok({"projects": [summary.__dict__ for summary in summaries]})
+        db = get_platform_db()
+        summaries = load_project_summaries(db, workflow_type=workflow_type)
+        projects = []
+        for summary in summaries:
+            payload = dict(summary.__dict__)
+            try:
+                latest_run = db.get_run(summary.latest_run_id) if summary.latest_run_id else None
+            except KeyError:
+                latest_run = None
+            payload["latest_result_id"] = _run_result_id(latest_run)
+            projects.append(payload)
+        return _ok({"projects": projects})
 
     @app.get("/api/projects/{project_id}")
     def get_project_detail(project_id: str) -> dict[str, Any]:
@@ -483,7 +502,7 @@ def _run_schema_generation_job(job_id: str) -> None:
             preview_rows=request.get("preview_rows"),
             llm_text_enabled=bool(request.get("llm_text_enabled")),
             max_llm_rows=int(request.get("max_llm_rows") or 50),
-            history=PlatformDB(),
+            history=None,
             product_settings=PlatformDB(),
         )
         store.advance_job(job_id, stage="validating", percent=75, message="Validating data quality")
@@ -501,6 +520,8 @@ def _run_schema_generation_job(job_id: str) -> None:
             quality_report=result.validation_report,
             summary={
                 "row_counts": dict(result.row_counts),
+                "requested_row_count": request.get("row_count"),
+                "row_count_mode": "fk_aware",
                 "tables": list(result.preview_tables.keys()),
                 "export_count": len(result.export_paths),
             },
@@ -638,7 +659,7 @@ def _result_response(record: dict[str, Any]) -> dict[str, Any]:
 def _project_detail_response(db: PlatformDB, project: ProjectRecord) -> dict[str, Any]:
     runs = db.list_runs(project_id=project.id)
     latest_run = runs[0] if runs else None
-    latest_result_id = latest_run.output_id if latest_run else project.metadata.get("latest_result_id")
+    latest_result_id = _run_result_id(latest_run) if latest_run else project.metadata.get("latest_result_id")
     latest_result = _optional_result_response(str(latest_result_id)) if latest_result_id else None
     artifacts = latest_result.get("artifacts") if isinstance(latest_result, dict) else None
     return {
@@ -646,9 +667,14 @@ def _project_detail_response(db: PlatformDB, project: ProjectRecord) -> dict[str
         "id": project.id,
         "name": project.name,
         "workflow_type": project.workflow_type,
+        "workflow_label": WORKFLOW_LABELS.get(project.workflow_type, project.workflow_type.replace("_", " ").title()),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
         "status": project.status,
+        "records": _records_label(latest_run),
+        "validation": _validation_label(latest_run),
+        "transfer": _transfer_label(latest_run),
+        "run_count": len(runs),
         "latest_run_id": latest_run.id if latest_run else None,
         "latest_result_id": latest_result_id,
         "metadata": project.metadata,
@@ -660,28 +686,33 @@ def _project_detail_response(db: PlatformDB, project: ProjectRecord) -> dict[str
 
 
 def _run_summary_response(run: RunRecord) -> dict[str, Any]:
+    result_id = _run_result_id(run)
     return {
         "run_id": run.id,
         "id": run.id,
         "project_id": run.project_id,
         "workflow_type": run.workflow_type,
+        "workflow_label": WORKFLOW_LABELS.get(run.workflow_type, run.workflow_type.replace("_", " ").title()),
         "status": run.status,
         "created_at": run.created_at,
         "updated_at": run.updated_at,
         "completed_at": run.metadata.get("completed_at"),
-        "result_id": run.output_id or run.metadata.get("result_id"),
+        "result_id": result_id,
         "job_id": run.metadata.get("job_id"),
         "validation_status": run.validation_status,
         "validation_passed": run.validation_passed,
+        "validation": _validation_label(run),
         "transfer_status": run.transfer_status,
+        "transfer": _transfer_label(run),
         "transfer_allowed": run.transfer_allowed,
         "transfer_attempted_at": run.transfer_attempted_at,
+        "records": _records_label(run),
         "metadata": _public_run_metadata(run.metadata),
     }
 
 
 def _run_detail_response(run: RunRecord) -> dict[str, Any]:
-    result_id = run.output_id or run.metadata.get("result_id")
+    result_id = _run_result_id(run)
     result = _optional_result_response(str(result_id)) if result_id else None
     return {
         **_run_summary_response(run),
@@ -691,6 +722,21 @@ def _run_detail_response(run: RunRecord) -> dict[str, Any]:
         "input": _public_run_metadata(run.metadata.get("input") if isinstance(run.metadata.get("input"), dict) else {}),
         "config": _public_run_metadata(run.metadata.get("config") if isinstance(run.metadata.get("config"), dict) else {}),
     }
+
+
+def _run_result_id(run: RunRecord | None) -> str | None:
+    if run is None:
+        return None
+    candidates = [recorded_result_id(run), run.output_id]
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate:
+            continue
+        try:
+            get_api_store().get_result_bundle(candidate)
+        except KeyError:
+            continue
+        return candidate
+    return None
 
 
 def _public_run_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -703,6 +749,49 @@ def _public_run_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         else:
             safe[key] = value
     return safe
+
+
+def _records_label(run: RunRecord | None) -> str:
+    if run is None:
+        return "-"
+    for key in ("row_counts", "row_counts_by_table"):
+        counts = run.metadata.get(key)
+        if isinstance(counts, dict):
+            numeric = [int(value) for value in counts.values() if isinstance(value, int | float)]
+            if numeric:
+                total = sum(numeric)
+                requested = run.metadata.get("requested_row_count")
+                row_count_mode = run.metadata.get("row_count_mode")
+                if isinstance(requested, int | float) and row_count_mode == "per_table":
+                    return f"{total:,} total / {int(requested):,} per table"
+                unique_counts = set(numeric)
+                if len(unique_counts) == 1 and len(numeric) > 1:
+                    return f"{total:,} total / {numeric[0]:,} per table"
+                return f"{total:,} total"
+    turn_count = run.metadata.get("turn_count")
+    if isinstance(turn_count, int | float):
+        return f"{int(turn_count):,}"
+    return "-"
+
+
+def _validation_label(run: RunRecord | None) -> str:
+    if run is None:
+        return "-"
+    if run.validation_passed is True:
+        return "Passed"
+    if run.validation_passed is False:
+        return "Failed"
+    return run.validation_status.replace("_", " ").title() if run.validation_status else "-"
+
+
+def _transfer_label(run: RunRecord | None) -> str:
+    if run is None:
+        return "-"
+    if run.transfer_status == "success":
+        return "Allowed"
+    if run.transfer_status == "blocked":
+        return "Blocked"
+    return "Not attempted"
 
 
 def _session_state_for_bundle(bundle: dict[str, Any]) -> dict[str, Any]:

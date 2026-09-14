@@ -20,6 +20,7 @@ from synth_platform.engine.inference.schema.distribution_rules import (
     parse_distribution_rules,
 )
 from synth_platform.engine.generation.schema.duplicate_guard import enforce_duplicate_policy, locked_columns_from_distribution_rules
+from synth_platform.engine.generation.schema.realism import apply_linked_field_rules
 from synth_platform.engine.validation.schema.performance.memory import track_peak_memory
 from synth_platform.engine.validation.schema.performance.report import build_pipeline_performance_report
 from synth_platform.engine.validation.schema.performance.timing import PipelineStageTimings, time_stage
@@ -138,6 +139,10 @@ def run_schema_pipeline(
                     seed=scaled_schema.seed,
                     locked_columns=locked_columns,
                 )
+                tables = {
+                    name: apply_linked_field_rules(df, rng=simulator.rng)
+                    for name, df in tables.items()
+                }
             preview_tables = {name: df.head(min(config.preview_rows, len(df))) for name, df in tables.items()}
             preview_rule_evidence = (
                 evaluate_distribution_rules(preview_tables, rules, schema=scaled_schema) if rules else []
@@ -195,6 +200,7 @@ def run_schema_pipeline(
                         ctx = {**parent_table_data, table_name: batch}
                         apply_distribution_rules(ctx, scaled_schema, child_cross_rules, seed=scaled_schema.seed)
                         batch = ctx[table_name]
+                    batch = apply_linked_field_rules(batch, rng=simulator.rng)
                     if table_name in parent_tables_needed:
                         if table_name not in parent_table_data:
                             parent_table_data[table_name] = batch.copy()
@@ -266,7 +272,7 @@ def run_schema_pipeline(
             scaled_schema,
             seed=scaled_schema.seed,
             row_counts=row_counts,
-            sampled=sampled and validation_scope != "full_export",
+            sampled=sampled,
             rule_evidence=final_rule_evidence,
             generation_mode="schema_driven",
             export_validation=export_validation_payload or None,

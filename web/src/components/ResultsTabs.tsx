@@ -12,10 +12,12 @@ type TabKey = "preview" | "files" | "quality" | "summary";
 
 export function ResultsTabs({ result }: { result: ResultBundle }) {
   const [tab, setTab] = useState<TabKey>("preview");
+  const [previewTable, setPreviewTable] = useState("");
   const [downloadError, setDownloadError] = useState("");
   const workflow = workflowForType(result.workflow_type);
   const WorkflowIcon = workflow.Icon;
-  const previewRows = useMemo(() => previewToRows(result.preview), [result.preview]);
+  const preview = useMemo(() => previewToTables(result.preview), [result.preview]);
+  const selectedPreview = preview.tables.find((table) => table.name === (previewTable || preview.tables[0]?.name)) ?? preview.tables[0];
   const saveMutation = useMutation({ mutationFn: () => saveResult(result.result_id) });
 
   async function handleDownload(artifact: ArtifactFileMetadata) {
@@ -48,7 +50,7 @@ export function ResultsTabs({ result }: { result: ResultBundle }) {
           </Link>
           <button className="secondary" disabled={saveMutation.isPending || saveMutation.isSuccess} onClick={() => saveMutation.mutate()}>
             <Save size={17} />
-            Save to My Twin
+            Save to My Twins
           </button>
         </div>
       </div>
@@ -59,7 +61,31 @@ export function ResultsTabs({ result }: { result: ResultBundle }) {
           </button>
         ))}
       </div>
-      {tab === "preview" ? <DataTable rows={previewRows} /> : null}
+      {tab === "preview" ? (
+        <div className="preview-panel">
+          {preview.tables.length > 1 ? (
+            <div className="table-switcher" aria-label="Preview tables">
+              {preview.tables.map((table) => (
+                <button
+                  aria-label={`${table.name} ${formatNumber(table.rowCount)}`}
+                  className={table.name === selectedPreview?.name ? "active" : ""}
+                  key={table.name}
+                  onClick={() => setPreviewTable(table.name)}
+                  type="button"
+                >
+                  {table.name}
+                  <span>{formatNumber(table.rowCount)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <DataTable
+            key={selectedPreview?.name ?? "empty-preview"}
+            pagination={selectedPreview ? { pageSize: 20, totalRows: selectedPreview.rowCount } : undefined}
+            rows={selectedPreview?.rows ?? []}
+          />
+        </div>
+      ) : null}
       {tab === "files" ? <DownloadList artifacts={result.artifacts} onDownload={handleDownload} /> : null}
       {tab === "quality" ? <QualitySummary report={result.quality_report} /> : null}
       {tab === "summary" ? <WorkflowSummary result={result} /> : null}
@@ -73,7 +99,7 @@ export function ResultsTabs({ result }: { result: ResultBundle }) {
         <div className="alert success" role="status">
           <CheckCircle2 size={18} />
           <span>
-            Saved to My Twin. <Link to="/projects">View twins</Link>
+            Saved to My Twins. <Link to="/projects">View twins</Link>
           </span>
         </div>
       ) : null}
@@ -87,17 +113,26 @@ export function ResultsTabs({ result }: { result: ResultBundle }) {
   );
 }
 
-function previewToRows(preview: Record<string, unknown> | null): Array<Record<string, unknown>> {
-  if (!preview) return [];
+function previewToTables(preview: Record<string, unknown> | null): { tables: Array<{ name: string; rowCount: number; rows: Array<Record<string, unknown>> }> } {
+  if (!preview) return { tables: [] };
   const tables = preview.tables;
+  const rowCounts = preview.row_counts && typeof preview.row_counts === "object" && !Array.isArray(preview.row_counts)
+    ? (preview.row_counts as Record<string, unknown>)
+    : {};
   if (tables && typeof tables === "object" && !Array.isArray(tables)) {
-    return Object.entries(tables as Record<string, unknown>).flatMap(([table, rows]) =>
-      Array.isArray(rows) ? (rows as Array<Record<string, unknown>>).map((row) => ({ table, ...row })) : []
-    );
+    return {
+      tables: Object.entries(tables as Record<string, unknown>)
+        .filter(([, rows]) => Array.isArray(rows))
+        .map(([name, rows]) => {
+          const previewRows = rows as Array<Record<string, unknown>>;
+          const rowCount = typeof rowCounts[name] === "number" ? Number(rowCounts[name]) : previewRows.length;
+          return { name, rowCount, rows: previewRows };
+        })
+    };
   }
-  if (Array.isArray(preview.turns)) return preview.turns as Array<Record<string, unknown>>;
-  if (Array.isArray(preview.rows)) return preview.rows as Array<Record<string, unknown>>;
-  return [preview];
+  if (Array.isArray(preview.turns)) return { tables: [{ name: "turns", rowCount: preview.turns.length, rows: preview.turns as Array<Record<string, unknown>> }] };
+  if (Array.isArray(preview.rows)) return { tables: [{ name: "rows", rowCount: preview.rows.length, rows: preview.rows as Array<Record<string, unknown>> }] };
+  return { tables: [{ name: "preview", rowCount: 1, rows: [preview] }] };
 }
 
 function WorkflowSummary({ result }: { result: ResultBundle }) {
@@ -142,6 +177,10 @@ function formatValue(value: unknown) {
   if (Array.isArray(value)) return value.join(", ");
   if (value && typeof value === "object") return JSON.stringify(value);
   return String(value ?? "-");
+}
+
+function formatNumber(value: number) {
+  return Number.isFinite(value) ? value.toLocaleString() : "-";
 }
 
 function saveBlob(blob: Blob, filename: string) {

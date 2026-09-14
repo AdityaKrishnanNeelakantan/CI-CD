@@ -21,6 +21,8 @@ export function RunDetailPage() {
   const run = runQuery.data.run;
   const workflow = workflowForType(run.workflow_type);
   const WorkflowIcon = workflow.Icon;
+  const hasInput = hasEntries(run.input);
+  const hasConfig = hasEntries(run.config);
 
   return (
     <div className="page-stack">
@@ -70,16 +72,22 @@ export function RunDetailPage() {
         </section>
       ) : null}
 
-      <section className="two-column">
-        <div className="panel">
-          <h2>Input</h2>
-          <pre>{JSON.stringify(run.input, null, 2)}</pre>
-        </div>
-        <div className="panel">
-          <h2>Config</h2>
-          <pre>{JSON.stringify(run.config, null, 2)}</pre>
-        </div>
-      </section>
+      {hasInput || hasConfig ? (
+        <section className="two-column">
+          {hasInput ? (
+            <div className="panel">
+              <h2>Input</h2>
+              <pre>{JSON.stringify(run.input, null, 2)}</pre>
+            </div>
+          ) : null}
+          {hasConfig ? (
+            <div className="panel">
+              <h2>Config</h2>
+              <pre>{JSON.stringify(run.config, null, 2)}</pre>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -97,6 +105,10 @@ function formatDate(value?: string | null) {
   if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function hasEntries(value: Record<string, unknown>) {
+  return Boolean(value && Object.keys(value).length);
 }
 
 async function downloadArtifact(artifact: ArtifactFileMetadata) {

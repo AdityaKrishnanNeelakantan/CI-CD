@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { workflows } from "./lib/workflows";
+import { DatabaseTwinPage } from "./pages/DatabaseTwinPage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ProgressPage } from "./pages/ProgressPage";
@@ -14,7 +15,6 @@ import { TemplateDetailPage } from "./pages/TemplateDetailPage";
 import { TemplatesPage } from "./pages/TemplatesPage";
 import { WorkflowInputPage } from "./pages/WorkflowInputPage";
 
-const databaseWorkflow = workflows.find((workflow) => workflow.key === "database")!;
 const documentWorkflow = workflows.find((workflow) => workflow.key === "document")!;
 const interactionWorkflow = workflows.find((workflow) => workflow.key === "interaction")!;
 
@@ -25,7 +25,7 @@ function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/schema" element={<SchemaTwinPage />} />
-          <Route path="/database" element={<WorkflowInputPage workflow={databaseWorkflow} />} />
+          <Route path="/database" element={<DatabaseTwinPage />} />
           <Route path="/document" element={<WorkflowInputPage workflow={documentWorkflow} />} />
           <Route path="/interaction" element={<WorkflowInputPage workflow={interactionWorkflow} />} />
           <Route path="/progress/:jobId" element={<ProgressPage />} />

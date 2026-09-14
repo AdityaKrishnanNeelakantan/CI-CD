@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Eye, Play, RotateCcw } from "lucide-react";
+import { ArrowLeft, ExternalLink, RotateCcw } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import { ArtifactFileMetadata, fetchDownload, getProject } from "../api";
+import { fetchDownload, getProject } from "../api";
+import type { ArtifactFileMetadata, ProjectDetail } from "../api";
 import { DownloadList } from "../components/DownloadList";
 import { QualitySummary } from "../components/QualitySummary";
 import { workflowForType } from "../lib/workflows";
@@ -31,14 +32,14 @@ export function ProjectDetailPage() {
               <WorkflowIcon size={24} />
             </span>
             <div>
-              <p className="eyebrow">Project</p>
+              <p className="eyebrow">My Twin</p>
               <h2>{project.name}</h2>
             </div>
           </div>
           <div className="button-row">
             <Link className="secondary" to="/projects">
               <ArrowLeft size={17} />
-              Projects
+              My Twins
             </Link>
             <Link className="primary" to={workflow.route}>
               <RotateCcw size={17} />
@@ -48,16 +49,14 @@ export function ProjectDetailPage() {
         </div>
         <div className="summary-grid">
           <Metric label="Workflow" value={workflow.title} />
-          <Metric label="Status" value={project.status} />
+          <Metric label="Status" value={label(project.status)} />
+          <Metric label="Generated Rows" value={recordsLabel(project)} />
+          <Metric label="Validation" value={project.validation ?? validationFromQuality(project.quality_report)} />
+          <Metric label="Runs" value={project.runs.length} />
+          <Metric label="Artifacts" value={project.artifacts?.length ?? 0} />
           <Metric label="Created" value={formatDate(project.created_at)} />
           <Metric label="Updated" value={formatDate(project.updated_at)} />
         </div>
-        {project.latest_result_id ? (
-          <Link className="secondary" to={`/results/${project.latest_result_id}`}>
-            <Eye size={17} />
-            Latest Result
-          </Link>
-        ) : null}
       </section>
 
       <section className="panel wide">
@@ -71,24 +70,33 @@ export function ProjectDetailPage() {
                   <th>Status</th>
                   <th>Created</th>
                   <th>Validation</th>
-                  <th>Transfer</th>
+                  <th>Generated Rows</th>
                   <th>Result</th>
-                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {project.runs.map((run) => (
                   <tr key={run.run_id}>
-                    <td>{run.run_id}</td>
-                    <td>{run.status}</td>
-                    <td>{formatDate(run.created_at)}</td>
-                    <td>{validationLabel(run.validation_passed, run.validation_status)}</td>
-                    <td>{run.transfer_status}</td>
-                    <td>{run.result_id ?? "-"}</td>
                     <td>
-                      <Link className="icon-button" title="View run" to={`/projects/${project.project_id}/runs/${run.run_id}`}>
-                        <Play size={17} />
+                      <Link className="project-name-link" to={`/projects/${project.id}/runs/${run.run_id}`}>
+                        <span className="mono-token">{shortId(run.run_id)}</span>
                       </Link>
+                    </td>
+                    <td><span className={`status-chip ${statusTone(run.status)}`}>{label(run.status)}</span></td>
+                    <td>{formatDate(run.created_at)}</td>
+                    <td>{run.validation ?? validationLabel(run.validation_passed, run.validation_status)}</td>
+                    <td>{run.records ?? "-"}</td>
+                    <td>
+                      {run.result_id ? (
+                        <Link className="text-link inline-link" to={`/results/${run.result_id}`}>
+                          <ExternalLink size={15} />
+                          Open result
+                        </Link>
+                      ) : (
+                        <Link className="text-link inline-link" to={`/projects/${project.id}/runs/${run.run_id}`}>
+                          View run
+                        </Link>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -132,10 +140,42 @@ function formatDate(value?: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function recordsLabel(project: ProjectDetail) {
+  if (project.records) return project.records;
+  const rowCounts = project.summary?.row_counts;
+  if (!rowCounts || typeof rowCounts !== "object") return "-";
+  const total = Object.values(rowCounts).reduce((sum, value) => sum + (typeof value === "number" ? value : 0), 0);
+  return total ? `${total.toLocaleString()} total` : "-";
+}
+
+function validationFromQuality(report?: Record<string, unknown> | null) {
+  if (!report) return "-";
+  const passed = report.passed ?? report.hard_checks_passed;
+  if (passed === true) return "Passed";
+  if (passed === false) return "Failed";
+  const status = report.status;
+  return typeof status === "string" ? label(status) : "-";
+}
+
 function validationLabel(passed: boolean | null, status: string | null) {
   if (passed === true) return "Passed";
   if (passed === false) return "Failed";
-  return status ?? "-";
+  return label(status);
+}
+
+function statusTone(status?: string | null) {
+  if (status === "completed" || status === "available") return "passed";
+  if (status === "failed") return "failed";
+  return "pending";
+}
+
+function label(value?: string | null) {
+  if (!value) return "-";
+  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function shortId(value: string) {
+  return value.length > 14 ? `${value.slice(0, 12)}...` : value;
 }
 
 async function downloadArtifact(artifact: ArtifactFileMetadata) {

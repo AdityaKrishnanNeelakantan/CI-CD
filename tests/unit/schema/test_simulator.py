@@ -395,6 +395,44 @@ class TestDataSimulator:
         assert len(data["orders"]) > len(data["customers"])
         assert len(data["order_items"]) > len(data["orders"])
 
+    def test_row_planning_uses_strongest_edge_for_multi_parent_child(self):
+        """A weak root edge must not mask account-to-transaction cardinality."""
+        from synth_platform.engine.inference.schema.planning import GenerationPlanner
+
+        schema = SchemaConfig(
+            name="Multi-parent planning",
+            seed=42,
+            tables=[
+                Table(name="merchants", row_count=100),
+                Table(name="accounts", row_count=100),
+                Table(name="transactions", row_count=100),
+            ],
+            columns={
+                "merchants": [Column(name="id", type="int", unique=True)],
+                "accounts": [Column(name="id", type="int", unique=True)],
+                "transactions": [
+                    Column(name="id", type="int", unique=True),
+                    Column(name="merchant_id", type="foreign_key"),
+                    Column(name="account_id", type="foreign_key"),
+                ],
+            },
+            relationships=[
+                Relationship(parent_table="merchants", parent_key="id", child_table="transactions", child_key="merchant_id"),
+                Relationship(parent_table="accounts", parent_key="id", child_table="transactions", child_key="account_id"),
+            ],
+            realism=RealismConfig(
+                row_planning="heuristic",
+                relationship_multipliers={
+                    "merchants->transactions": 2.0,
+                    "accounts->transactions": 10.0,
+                },
+            ),
+        )
+
+        plan = GenerationPlanner(schema).build()
+
+        assert plan.row_count_for("transactions", 0) == 1_000
+
     def test_realistic_text_and_coherence_generate_consistent_identity_fields(self):
         """Realistic text + coherence should derive email and username from the same name."""
         schema = SchemaConfig(

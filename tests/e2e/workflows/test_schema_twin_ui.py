@@ -39,7 +39,7 @@ def test_schema_twin_end_to_end_generate_preview_validate_download():
     assert not at.exception
     assert at.session_state["schema_config"] is not None
 
-    row_input = next(n for n in at.number_input if n.label == "Rows per table")
+    row_input = next(n for n in at.number_input if n.label == "Base rows")
     row_input.set_value(20).run()
     assert not at.exception
 
@@ -48,7 +48,7 @@ def test_schema_twin_end_to_end_generate_preview_validate_download():
     assert result is not None
     assert set(result.preview_tables) == {"users", "orders"}
     assert result.row_counts["users"] == 20
-    assert result.row_counts["orders"] == 20
+    assert result.row_counts["orders"] > result.row_counts["users"]
     assert at.session_state["schema_zip_bytes"]
 
     preview = next(s for s in at.selectbox if s.label == "Preview table")

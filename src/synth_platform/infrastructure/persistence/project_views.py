@@ -27,10 +27,13 @@ class ProjectSummary:
     workflow_label: str
     created_at: str
     created_on: str
+    updated_at: str
+    updated_on: str
     status: str
     records: str
     validation: str
     transfer: str
+    run_count: int
     latest_run_id: str | None
     latest_result_id: str | None
 
@@ -51,8 +54,8 @@ def write_product_settings(db: PlatformDB, values: dict[str, Any]) -> None:
 
 def load_project_summaries(db: PlatformDB, *, workflow_type: str | None = None) -> list[ProjectSummary]:
     projects = db.list_projects(workflow_type=workflow_type)
-    runs_by_project = _latest_runs_by_project(db)
-    return [_project_summary(project, runs_by_project.get(project.id)) for project in projects]
+    latest_runs, run_counts = _project_run_summary(db)
+    return [_project_summary(project, latest_runs.get(project.id), run_counts.get(project.id, 0)) for project in projects]
 
 
 def project_run_rows(db: PlatformDB, project_id: str) -> list[dict[str, str]]:
@@ -66,22 +69,26 @@ def project_table_rows(summaries: list[ProjectSummary]) -> list[dict[str, str]]:
             "Type": summary.workflow_label,
             "Records": summary.records,
             "Created On": summary.created_on,
+            "Updated On": summary.updated_on,
             "Status": _label(summary.status),
             "Validation": summary.validation,
             "Transfer": summary.transfer,
+            "Runs": str(summary.run_count),
         }
         for summary in summaries
     ]
 
 
-def _latest_runs_by_project(db: PlatformDB) -> dict[str, RunRecord]:
+def _project_run_summary(db: PlatformDB) -> tuple[dict[str, RunRecord], dict[str, int]]:
     latest: dict[str, RunRecord] = {}
+    counts: dict[str, int] = {}
     for run in db.list_runs():
         latest.setdefault(run.project_id, run)
-    return latest
+        counts[run.project_id] = counts.get(run.project_id, 0) + 1
+    return latest, counts
 
 
-def _project_summary(project: ProjectRecord, latest_run: RunRecord | None) -> ProjectSummary:
+def _project_summary(project: ProjectRecord, latest_run: RunRecord | None, run_count: int) -> ProjectSummary:
     return ProjectSummary(
         id=project.id,
         name=project.name,
@@ -89,13 +96,26 @@ def _project_summary(project: ProjectRecord, latest_run: RunRecord | None) -> Pr
         workflow_label=WORKFLOW_LABELS.get(project.workflow_type, _label(project.workflow_type)),
         created_at=project.created_at,
         created_on=_format_timestamp(project.created_at),
+        updated_at=project.updated_at,
+        updated_on=_format_timestamp(project.updated_at),
         status=project.status,
         records=_records_label(latest_run),
         validation=_validation_label(latest_run),
         transfer=_transfer_label(latest_run),
+        run_count=run_count,
         latest_run_id=latest_run.id if latest_run else None,
-        latest_result_id=latest_run.output_id if latest_run else None,
+        latest_result_id=run_result_id(latest_run),
     )
+
+
+def run_result_id(run: RunRecord | None) -> str | None:
+    """Return an explicitly recorded result-bundle ID, not an output artifact ID."""
+    if run is None:
+        return None
+    metadata_result_id = run.metadata.get("result_id")
+    if isinstance(metadata_result_id, str) and metadata_result_id:
+        return metadata_result_id
+    return None
 
 
 def _run_row(run: RunRecord) -> dict[str, str]:
@@ -118,7 +138,15 @@ def _records_label(run: RunRecord | None) -> str:
         if isinstance(counts, dict):
             numeric = [int(value) for value in counts.values() if isinstance(value, int | float)]
             if numeric:
-                return f"{sum(numeric):,}"
+                total = sum(numeric)
+                requested = run.metadata.get("requested_row_count")
+                row_count_mode = run.metadata.get("row_count_mode")
+                if isinstance(requested, int | float) and row_count_mode == "per_table":
+                    return f"{total:,} total / {int(requested):,} per table"
+                unique_counts = set(numeric)
+                if len(unique_counts) == 1 and len(numeric) > 1:
+                    return f"{total:,} total / {numeric[0]:,} per table"
+                return f"{total:,} total"
     turn_count = run.metadata.get("turn_count")
     if isinstance(turn_count, int | float):
         return f"{int(turn_count):,}"

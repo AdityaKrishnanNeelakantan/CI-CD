@@ -71,10 +71,14 @@ export function SchemaTwinPage() {
     setIntent(routedContext.prompt);
     const recordCount = routedContext.intent?.prefill?.record_count;
     const outputFormat = routedContext.intent?.prefill?.output_format;
+    const other = routedContext.intent?.prefill?.other ?? {};
     setConfig((current) => ({
       ...current,
       row_count: typeof recordCount === "number" ? recordCount : current.row_count,
-      export_format: outputFormat === "parquet" ? "parquet" : outputFormat === "csv" ? "csv" : current.export_format
+      export_format: outputFormat === "parquet" ? "parquet" : outputFormat === "csv" ? "csv" : current.export_format,
+      locale: typeof other.locale === "string" ? other.locale : current.locale,
+      seed: typeof other.seed === "number" ? other.seed : current.seed,
+      llm_text_enabled: typeof other.llm_text_enabled === "boolean" ? other.llm_text_enabled : current.llm_text_enabled
     }));
   }, [routedContext]);
 
@@ -106,6 +110,10 @@ export function SchemaTwinPage() {
 
   async function handleFile(file: File) {
     setError("");
+    if (isDatabaseFile(file.name)) {
+      setError("SQLite database files must use Database Twin, not Schema Twin.");
+      return;
+    }
     const currentSession = session ?? (await createSessionMutation.mutateAsync(intent));
     uploadMutation.mutate({ sessionId: currentSession.id, file });
   }
@@ -162,7 +170,7 @@ export function SchemaTwinPage() {
           <h2>Generate</h2>
           <div className="config-grid">
             <label>
-              Rows per table
+              Base rows
               <input min={1} type="number" value={config.row_count} onChange={(event) => setConfig({ ...config, row_count: Number(event.target.value) })} />
             </label>
             <label>
@@ -216,13 +224,18 @@ function routedContextFromSearch(search: string) {
   };
 }
 
-function parseIntent(raw: string | null): { prefill?: { record_count?: number | null; output_format?: string | null } } | null {
+function parseIntent(raw: string | null): { prefill?: { record_count?: number | null; output_format?: string | null; other?: Record<string, unknown> } } | null {
   if (!raw) return null;
   try {
     return JSON.parse(decodeURIComponent(raw));
   } catch {
     return null;
   }
+}
+
+function isDatabaseFile(filename: string) {
+  const lower = filename.toLowerCase();
+  return lower.endsWith(".db") || lower.endsWith(".sqlite") || lower.endsWith(".sqlite3");
 }
 
 function RoutedBanner({ title, prompt, filename }: { title: string; prompt: string; filename: string }) {

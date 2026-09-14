@@ -19,8 +19,10 @@ CARDINALITY_PATTERNS: Dict[tuple[str, str], tuple[float, float]] = {
     ("user", "event"): (15.0, 80.0),
     ("subscription", "invoice"): (6.0, 24.0),
     ("patient", "appointment"): (2.0, 8.0),
-    ("account", "transaction"): (20.0, 100.0),
+    ("account", "transaction"): (10.0, 30.0),
+    ("account", "card"): (1.0, 2.0),
     ("customer", "account"): (1.0, 2.5),
+    ("customer", "loan"): (0.2, 0.8),
     ("employee", "timesheet"): (50.0, 200.0),
     ("student", "enrollment"): (3.0, 8.0),
     ("entity", "event"): (10.0, 50.0),
@@ -33,6 +35,7 @@ REFERENCE_TABLE_PATTERNS = {
     "department", "region", "currency", "language", "country",
     "brand", "color", "size", "material", "genre", "plan",
     "tier", "level", "priority", "state", "province",
+    "branch",
 }
 
 ACTIVITY_TABLE_PATTERNS = {
@@ -161,7 +164,8 @@ class GenerationPlanner:
             parent_count = row_counts.get(parent_name, existing_counts.get(parent_name, base_rows))
 
             for child_name in children_of[parent_name]:
-                if child_name in row_counts:
+                child_table = tables[child_name]
+                if child_table.is_reference or self._classify_table(child_name) == "reference":
                     continue
 
                 key = f"{parent_name}->{child_name}"
@@ -176,14 +180,15 @@ class GenerationPlanner:
                     )
                     multiplier = float(self.rng.uniform(low, high))
 
-                if len(parents_of[child_name]) > 1:
-                    multiplier /= len(parents_of[child_name])
-
                 child_count = max(10, int(round(parent_count * multiplier)))
                 if self._classify_table(child_name) == "activity":
                     child_count = min(child_count, base_rows * 100)
 
-                row_counts[child_name] = child_count
+                # A child can have several parents (for example transactions
+                # reference both accounts and merchants). Evaluate every edge
+                # and retain the strongest cardinality signal instead of letting
+                # whichever root happens to be visited first win.
+                row_counts[child_name] = max(row_counts.get(child_name, 0), child_count)
                 if child_name not in visited:
                     visited.add(child_name)
                     queue.append(child_name)
@@ -214,7 +219,7 @@ class GenerationPlanner:
             "company", "organization", "department", "payment", "invoice", "transaction",
             "review", "rating", "comment", "feedback", "event", "session", "log",
             "activity", "usage", "account", "wallet", "doctor", "teacher", "instructor",
-            "timesheet", "enrollment", "grade",
+            "timesheet", "enrollment", "grade", "branch", "merchant", "card", "loan",
         ]
         for concept in concepts:
             if concept in lowered:

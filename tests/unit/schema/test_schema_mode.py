@@ -18,7 +18,14 @@ from synth_platform.application.workflows.schema_twin import (
     validation_highlights,
 )
 from synth_platform.application.orchestration.schema.result import PipelineResult
-from synth_platform.engine.inference.schema.schema import Column, SchemaConfig, Table
+from synth_platform.engine.generation.schema.vocab_seeds import CITIES_BY_COUNTRY
+from synth_platform.engine.inference.schema.schema import (
+    Column,
+    RealismConfig,
+    Relationship,
+    SchemaConfig,
+    Table,
+)
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "schema" / "schema_twin_minimal.json"
 
@@ -61,7 +68,7 @@ def test_generate_from_schema_reuses_pipeline_and_exports(tmp_path: Path):
 
     assert set(result.preview_tables) == {"users", "orders"}
     assert result.row_counts["users"] == 25
-    assert result.row_counts["orders"] == 25
+    assert result.row_counts["orders"] > result.row_counts["users"]
     assert result.export_paths["users"].exists()
     assert result.export_paths["orders"].exists()
 
@@ -79,6 +86,145 @@ def test_generate_from_schema_reuses_pipeline_and_exports(tmp_path: Path):
     assert "users.csv" in names
     assert "orders.csv" in names
     assert "validation_report.json" in names
+
+
+def test_schema_twin_generates_only_valid_city_country_tuples(tmp_path: Path):
+    """Regression: independently declared City/Country categoricals stay linked."""
+    schema = SchemaConfig(
+        name="branch-geography",
+        seed=17,
+        tables=[Table(name="branches", row_count=1)],
+        columns={
+            "branches": [
+                Column(
+                    name="BranchId",
+                    type="int",
+                    unique=True,
+                    distribution_params={"min": 1, "max": 10_000},
+                ),
+                Column(name="branch_name", type="text", distribution_params={}),
+                Column(
+                    name="City",
+                    type="categorical",
+                    distribution_params={
+                        "choices": ["Fort Worth", "Dallas", "Austin", "Houston", "Los Angeles", "Chicago"]
+                    },
+                ),
+                Column(
+                    name="Country",
+                    type="categorical",
+                    distribution_params={"choices": ["India", "Canada", "France", "Germany", "Australia"]},
+                ),
+            ]
+        },
+    )
+
+    result = generate_from_schema(
+        schema,
+        row_count=80,
+        seed=17,
+        output_dir=tmp_path / "geo",
+        preview_rows=80,
+    )
+    branches = result.preview_tables["branches"]
+
+    assert len(branches) == 80
+    assert all(
+        city in CITIES_BY_COUNTRY[country]
+        for city, country in zip(branches["City"], branches["Country"])
+    )
+    assert all(
+        str(branch_name).startswith(f"{city} ")
+        for branch_name, city in zip(branches["branch_name"], branches["City"])
+    )
+
+
+def test_schema_twin_scales_child_rows_from_foreign_keys(tmp_path: Path):
+    """Regression: the global setting is a base, not a forced flat count."""
+    schema = SchemaConfig(
+        name="parent-child-counts",
+        seed=5,
+        tables=[Table(name="parents", row_count=1), Table(name="children", row_count=1)],
+        columns={
+            "parents": [Column(name="parent_id", type="int", unique=True, distribution_params={})],
+            "children": [
+                Column(name="child_id", type="int", unique=True, distribution_params={}),
+                Column(name="parent_id", type="foreign_key", distribution_params={}),
+            ],
+        },
+        relationships=[
+            Relationship(
+                parent_table="parents",
+                parent_key="parent_id",
+                child_table="children",
+                child_key="parent_id",
+            )
+        ],
+        realism=RealismConfig(relationship_multipliers={"parents->children": 3.0}),
+    )
+
+    result = generate_from_schema(
+        schema,
+        row_count=12,
+        seed=5,
+        output_dir=tmp_path / "counts",
+        preview_rows=12,
+    )
+
+    assert result.row_counts == {"parents": 12, "children": 36}
+    assert set(result.preview_tables["children"]["parent_id"]).issubset(
+        set(result.preview_tables["parents"]["parent_id"])
+    )
+
+
+def test_schema_twin_infers_fintech_defaults_for_banking_constellation(tmp_path: Path):
+    schema = SchemaConfig(
+        name="banking-defaults",
+        seed=21,
+        tables=[
+            Table(name="customers", row_count=1),
+            Table(name="accounts", row_count=1),
+            Table(name="loans", row_count=1),
+            Table(name="transactions", row_count=1),
+        ],
+        columns={
+            "customers": [Column(name="customer_id", type="text", unique=True)],
+            "accounts": [
+                Column(name="account_id", type="text", unique=True),
+                Column(name="account_type", type="text"),
+                Column(name="balance_usd", type="float"),
+            ],
+            "loans": [
+                Column(name="loan_id", type="text", unique=True),
+                Column(name="loan_amount", type="float"),
+                Column(name="interest_rate", type="float"),
+            ],
+            "transactions": [
+                Column(name="transaction_id", type="text", unique=True),
+                Column(name="amount_usd", type="float"),
+            ],
+        },
+    )
+
+    result = generate_from_schema(
+        schema,
+        row_count=50,
+        seed=21,
+        output_dir=tmp_path / "banking",
+        preview_rows=50,
+    )
+
+    accounts = result.preview_tables["accounts"]
+    loans = result.preview_tables["loans"]
+    assert result.schema.domain == "fintech"
+    assert set(accounts["account_type"]) <= {
+        "checking",
+        "savings",
+        "money_market",
+        "certificate_of_deposit",
+    }
+    assert loans["interest_rate"].between(0.01, 0.36).all()
+    assert loans["loan_amount"].ge(1_000).all()
 
 
 @pytest.mark.parametrize(

@@ -23,9 +23,10 @@ _DEFAULT_LOCALE = "en_US"
 _GIVEN_NAME_COLUMN_RE = re.compile(r"(^|_)(first|given|middle)_?names?$", re.IGNORECASE)
 _FAMILY_NAME_COLUMN_RE = re.compile(r"(^|_)(last|family|maiden|sur)_?names?$", re.IGNORECASE)
 _FULL_NAME_COLUMN_RE = re.compile(
-    r"(^name$|(^|_)(full_?name|customer_?name|client_?name|patient_?name|contact_?name)$)",
+    r"(^name$|(^|_)(full_?name|customer_?name|client_?name|patient_?name|contact_?name|manager_?name)$)",
     re.IGNORECASE,
 )
+_BRANCH_NAME_COLUMN_RE = re.compile(r"(^|_)(branch|office|location)(_?name)?$", re.IGNORECASE)
 _ADDRESS_COLUMN_RE = re.compile(r"(^|_)(address|street|street_?address|addr)(_|$)", re.IGNORECASE)
 _CITY_COLUMN_RE = re.compile(r"(^|_)(city|town)(_|$)", re.IGNORECASE)
 _STATE_COLUMN_RE = re.compile(r"(^|_)(state|province|region)(_|$)", re.IGNORECASE)
@@ -64,6 +65,7 @@ class ContextFieldKind(str, Enum):
     POSTAL_CODE = "postal_code"
     COUNTRY = "country"
     COMPANY = "company"
+    BRANCH_NAME = "branch_name"
     IDENTIFIER = "identifier"
     UUID = "uuid"
     FREE_TEXT = "free_text"
@@ -82,6 +84,7 @@ CONTEXT_AWARE_KINDS = frozenset(
         ContextFieldKind.POSTAL_CODE,
         ContextFieldKind.COUNTRY,
         ContextFieldKind.COMPANY,
+        ContextFieldKind.BRANCH_NAME,
         ContextFieldKind.IDENTIFIER,
         ContextFieldKind.UUID,
         ContextFieldKind.FREE_TEXT,
@@ -118,6 +121,8 @@ def _kind_from_column_name(column_name: str) -> ContextFieldKind | None:
         return ContextFieldKind.COUNTRY
     if _COMPANY_COLUMN_RE.search(column_name):
         return ContextFieldKind.COMPANY
+    if _BRANCH_NAME_COLUMN_RE.search(column_name):
+        return ContextFieldKind.BRANCH_NAME
     if _UUID_COLUMN_RE.search(column_name):
         return ContextFieldKind.UUID
     if (
@@ -266,6 +271,10 @@ def render_context_value(
         return faker.country()
     if kind is ContextFieldKind.COMPANY:
         return faker.company()
+    if kind is ContextFieldKind.BRANCH_NAME:
+        city = faker.city()
+        suffix = faker.random_element(elements=("Branch", "Office", "Financial Center", "Service Center"))
+        return f"{city} {suffix}"
     if kind is ContextFieldKind.UUID:
         return str(faker.uuid4())
     if kind is ContextFieldKind.IDENTIFIER:

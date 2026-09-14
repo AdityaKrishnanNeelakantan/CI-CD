@@ -5,16 +5,12 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   ApiError,
   WorkflowSession,
-  configureDatabaseSession,
   configureDocumentSession,
   configureInteractionSession,
-  createDatabaseSession,
   createDocumentSession,
   createInteractionSession,
-  startDatabaseGeneration,
   startDocumentGeneration,
   startInteractionGeneration,
-  uploadDatabaseSource,
   uploadDocument,
   uploadInteractionTranscript
 } from "../api";
@@ -33,10 +29,6 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
   const routedContext = useMemo(() => routedContextFromSearch(location.search), [location.search]);
   const [intent, setIntent] = useState("Development & testing");
   const [session, setSession] = useState<WorkflowSession | null>(null);
-  const [connection, setConnection] = useState("");
-  const [rowCount, setRowCount] = useState(100);
-  const [rowCountsByTable, setRowCountsByTable] = useState<Record<string, number>>({});
-  const [sampleLimit, setSampleLimit] = useState(100);
   const [seed, setSeed] = useState(42);
   const [extractionMethod, setExtractionMethod] = useState("auto");
   const [llmTextEnabled, setLlmTextEnabled] = useState(false);
@@ -51,16 +43,11 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
       validateUpload(workflow.key, file);
       const currentSession = session ?? (await createSession(workflow.key, intent));
       setSession(currentSession);
-      if (workflow.key === "database") return uploadDatabaseSource(currentSession.id, file, sourceTypeForFile(file.name));
       if (workflow.key === "document") return uploadDocument(currentSession.id, file);
       return uploadInteractionTranscript(currentSession.id, file);
     },
     onSuccess: (nextSession) => {
       setSession(nextSession);
-      const tables = sourceTables(nextSession);
-      if (tables.length) {
-        setRowCountsByTable(Object.fromEntries(tables.map((table) => [table, rowCount])));
-      }
       setUploaded(true);
       setError("");
     },
@@ -71,9 +58,12 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
     if (!routedContext.prompt) return;
     setIntent(routedContext.prompt);
     const prefill = routedContext.intent?.prefill;
-    if (typeof prefill?.record_count === "number") setRowCount(prefill.record_count);
     if (typeof prefill?.interaction_type === "string") setInteractionType(prefill.interaction_type);
     if (typeof prefill?.output_format === "string") setOutputFormat(prefill.output_format);
+    if (typeof prefill?.other?.seed === "number") setSeed(prefill.other.seed);
+    if (typeof prefill?.other?.extraction_method === "string") setExtractionMethod(prefill.other.extraction_method);
+    if (typeof prefill?.other?.llm_text_enabled === "boolean") setLlmTextEnabled(prefill.other.llm_text_enabled);
+    if (typeof prefill?.other?.remove_sensitive_information === "boolean") setRemoveSensitive(prefill.other.remove_sensitive_information);
   }, [routedContext]);
 
   const generateMutation = useMutation({
@@ -84,15 +74,6 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
       }
       const currentSession = session ?? (await createSession(workflow.key, intent));
       setSession(currentSession);
-      if (workflow.key === "database") {
-        await configureDatabaseSession(currentSession.id, {
-          row_count: rowCount,
-          row_counts_by_table: Object.keys(rowCountsByTable).length ? rowCountsByTable : undefined,
-          sample_limit: sampleLimit,
-          seed
-        });
-        return startDatabaseGeneration(currentSession.id);
-      }
       if (workflow.key === "document") {
         await configureDocumentSession(currentSession.id, {
           seed,
@@ -113,8 +94,7 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
     onError: (err) => setError(messageForError(err))
   });
 
-  const uploadLabel = workflow.key === "database" ? "SQLite database" : workflow.key === "document" ? "PDF document" : "Transcript file";
-  const tables = sourceTables(session);
+  const uploadLabel = workflow.key === "document" ? "PDF document" : "Transcript file";
   const document = session?.state.document as Record<string, unknown> | undefined;
   const transcript = session?.state.transcript as Record<string, unknown> | undefined;
 
@@ -155,20 +135,7 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
               <option>Privacy review</option>
             </select>
           </label>
-          {workflow.key === "database" ? (
-            <label>
-              Connection details
-              <textarea disabled placeholder="Use SQLite upload for this workflow" value={connection} onChange={(event) => setConnection(event.target.value)} />
-            </label>
-          ) : null}
           <UploadPanel accept={acceptForWorkflow(workflow.key)} busy={uploadMutation.isPending} label={uploadLabel} onFile={(file) => uploadMutation.mutate(file)} />
-          {workflow.key === "database" ? <div className="empty">SQLite upload is supported for this workflow.</div> : null}
-          {tables.length ? (
-            <div className="summary-grid">
-              <Metric label="Tables" value={tables.length} />
-              <Metric label="Source" value="SQLite" />
-            </div>
-          ) : null}
           {document ? (
             <div className="summary-grid">
               <Metric label="Document" value={String(document.filename ?? "PDF")} />
@@ -187,39 +154,10 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
           <h2>Configure</h2>
           <div className="config-grid">
             <label>
-              Records
-              <input min={1} type="number" value={rowCount} onChange={(event) => setRowCount(Number(event.target.value))} />
-            </label>
-            <label>
               Random seed
               <input min={0} type="number" value={seed} onChange={(event) => setSeed(Number(event.target.value))} />
             </label>
           </div>
-          {workflow.key === "database" ? (
-            <>
-              <div className="config-grid">
-                <label>
-                  Sample limit
-                  <input min={1} type="number" value={sampleLimit} onChange={(event) => setSampleLimit(Number(event.target.value))} />
-                </label>
-              </div>
-              {tables.length ? (
-                <div className="table-count-grid">
-                  {tables.map((table) => (
-                    <label key={table}>
-                      {table}
-                      <input
-                        min={1}
-                        type="number"
-                        value={rowCountsByTable[table] ?? rowCount}
-                        onChange={(event) => setRowCountsByTable({ ...rowCountsByTable, [table]: Number(event.target.value) })}
-                      />
-                    </label>
-                  ))}
-                </div>
-              ) : null}
-            </>
-          ) : null}
           {workflow.key === "document" ? (
             <>
               <label>
@@ -282,7 +220,12 @@ function routedContextFromSearch(search: string) {
 }
 
 function parseIntent(raw: string | null): {
-  prefill?: { record_count?: number | null; output_format?: string | null; interaction_type?: string | null };
+  prefill?: {
+    record_count?: number | null;
+    output_format?: string | null;
+    interaction_type?: string | null;
+    other?: Record<string, unknown>;
+  };
 } | null {
   if (!raw) return null;
   try {
@@ -293,25 +236,13 @@ function parseIntent(raw: string | null): {
 }
 
 async function createSession(key: WorkflowConfig["key"], intent: string): Promise<WorkflowSession> {
-  if (key === "database") return createDatabaseSession(intent);
   if (key === "document") return createDocumentSession(intent);
   return createInteractionSession(intent);
 }
 
 function acceptForWorkflow(key: WorkflowConfig["key"]) {
-  if (key === "database") return ".sqlite,.sqlite3,.db";
   if (key === "document") return ".pdf";
   return ".txt,.log";
-}
-
-function sourceTypeForFile(name: string) {
-  return "sqlite";
-}
-
-function sourceTables(session: WorkflowSession | null): string[] {
-  const source = session?.state.source as Record<string, unknown> | undefined;
-  const tables = source?.tables;
-  return Array.isArray(tables) ? tables.map(String) : [];
 }
 
 function formatBytes(size: number) {

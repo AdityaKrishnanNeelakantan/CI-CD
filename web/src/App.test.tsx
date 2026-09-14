@@ -202,6 +202,45 @@ function installFetchMock() {
         }
       });
     }
+    if (url === "/api/intent/workflow" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const filename = body.attachments?.[0]?.filename as string | undefined;
+      if (filename?.endsWith(".csv")) {
+        return jsonResponse({
+          data: {
+            workflow_type: "schema_twin",
+            confidence: 0.42,
+            reason: "CSV can describe tabular schema",
+            suggested_route: "/schema",
+            can_auto_start: false,
+            next_action: "choose_workflow",
+            detected_input: { kind: "schema", file_type: "csv", source: "attachment" },
+            prefill: { record_count: null, privacy_level: null, output_format: null, interaction_type: null, document_type: null, other: {} },
+            alternatives: [
+              { workflow_type: "schema_twin", confidence: 0.42, reason: "CSV can describe tabular schema" },
+              { workflow_type: "database_twin", confidence: 0.4, reason: "CSV can represent source rows" }
+            ],
+            warnings: []
+          }
+        });
+      }
+      return jsonResponse({
+        data: {
+          workflow_type: filename?.endsWith(".pdf") ? "document_twin" : "interaction_twin",
+          confidence: filename?.endsWith(".pdf") ? 0.92 : 0.86,
+          reason: filename?.endsWith(".pdf")
+            ? "PDF document upload; Prompt mentions pdf"
+            : "Prompt mentions customer chats",
+          suggested_route: filename?.endsWith(".pdf") ? "/document" : "/interaction",
+          can_auto_start: false,
+          next_action: "configure_required",
+          detected_input: { kind: filename?.endsWith(".pdf") ? "document" : "natural_language", file_type: filename ? filename.split(".").pop() : null, source: filename ? "attachment" : "prompt" },
+          prefill: { record_count: null, privacy_level: null, output_format: null, interaction_type: "support_chat", document_type: "document", other: {} },
+          alternatives: [],
+          warnings: filename?.endsWith(".parquet") ? ["Parquet is not currently supported from chat routing."] : []
+        }
+      });
+    }
     if (url === "/api/schema/sessions" && method === "POST") {
       return jsonResponse({ data: session }, 201);
     }
@@ -345,6 +384,48 @@ describe("Synthetic Data Twin routed app", () => {
     expect(screen.getByRole("link", { name: /Database Twin/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Document Twin/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Customer Interaction Twin/i })).toBeInTheDocument();
+  });
+
+  test("home page directly navigates to the highest-confidence workflow", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.type(screen.getByLabelText("Workflow request"), "create synthetic pdf from this");
+    await user.upload(screen.getByLabelText(/Attach SQL/i), new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByTitle("Send"));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/document"));
+    expect(await screen.findByText(/Started from chat request/i)).toBeInTheDocument();
+    expect(screen.getByText(/report.pdf/i)).toBeInTheDocument();
+  });
+
+  test("home page routes low-confidence decisions to the selected workflow without alternatives", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.type(screen.getByLabelText("Workflow request"), "use this csv");
+    await user.upload(screen.getByLabelText(/Attach SQL/i), new File(["id,name\n1,Ada"], "data.csv", { type: "text/csv" }));
+    await user.click(screen.getByTitle("Send"));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/schema"));
+    expect(await screen.findByText(/Started from chat request/i)).toBeInTheDocument();
+    expect(screen.getByText(/data.csv/i)).toBeInTheDocument();
+  });
+
+  test("home page passes attached file metadata to the intent request", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.type(screen.getByLabelText("Workflow request"), "generate fake customer chats");
+    await user.upload(screen.getByLabelText(/Attach SQL/i), new File(["Customer: hello"], "support.log", { type: "text/plain" }));
+    await user.click(screen.getByTitle("Send"));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/intent/workflow")).toBe(true));
+    await waitFor(() => expect(window.location.pathname).toBe("/interaction"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const intentCall = calls.find(([url]) => String(url) === "/api/intent/workflow");
+    const body = JSON.parse(String(intentCall?.[1]?.body ?? "{}"));
+    expect(body.attachments[0]).toMatchObject({ filename: "support.log", extension: ".log", content_type: "text/plain" });
   });
 
   test("polls and renders a shared progress job", async () => {

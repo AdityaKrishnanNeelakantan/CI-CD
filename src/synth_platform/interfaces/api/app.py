@@ -37,6 +37,7 @@ from synth_platform.infrastructure.jobs.inline import LocalJobRunner
 from synth_platform.interfaces.api.contracts import GenerationJob, ResultBundle, WorkflowSession
 from synth_platform.interfaces.api.routes.database import router as database_router
 from synth_platform.interfaces.api.routes.document import router as document_router
+from synth_platform.interfaces.api.routes.intent import router as intent_router
 from synth_platform.interfaces.api.routes.interaction import router as interaction_router
 from synth_platform.interfaces.api.store import get_api_store
 
@@ -100,6 +101,7 @@ def create_app() -> FastAPI:
     _register_error_handlers(app)
     app.include_router(database_router)
     app.include_router(document_router)
+    app.include_router(intent_router)
     app.include_router(interaction_router)
     _register_routes(app)
     return app

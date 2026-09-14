@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Play } from "lucide-react";
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ApiError,
   WorkflowSession,
@@ -28,7 +28,9 @@ type WorkflowInputPageProps = {
 
 export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const WorkflowIcon = workflow.Icon;
+  const routedContext = useMemo(() => routedContextFromSearch(location.search), [location.search]);
   const [intent, setIntent] = useState("Development & testing");
   const [session, setSession] = useState<WorkflowSession | null>(null);
   const [connection, setConnection] = useState("");
@@ -64,6 +66,15 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
     },
     onError: (err) => setError(messageForError(err))
   });
+
+  useEffect(() => {
+    if (!routedContext.prompt) return;
+    setIntent(routedContext.prompt);
+    const prefill = routedContext.intent?.prefill;
+    if (typeof prefill?.record_count === "number") setRowCount(prefill.record_count);
+    if (typeof prefill?.interaction_type === "string") setInteractionType(prefill.interaction_type);
+    if (typeof prefill?.output_format === "string") setOutputFormat(prefill.output_format);
+  }, [routedContext]);
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -119,6 +130,13 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
         </div>
       </section>
       <WorkflowStepper activeIndex={session ? 1 : 0} steps={workflow.steps} />
+      {routedContext.prompt || routedContext.filename ? (
+        <div className="route-banner">
+          <strong>Started from chat request: {routedContext.prompt ? `"${routedContext.prompt}"` : "attached file"}</strong>
+          <span>Detected workflow: {workflow.title}</span>
+          {routedContext.filename ? <span>Attached file: {routedContext.filename}. Upload it here to continue with generation.</span> : null}
+        </div>
+      ) : null}
       {error ? (
         <div className="alert error" role="alert">
           <AlertCircle size={18} />
@@ -252,6 +270,26 @@ export function WorkflowInputPage({ workflow }: WorkflowInputPageProps) {
       </section>
     </div>
   );
+}
+
+function routedContextFromSearch(search: string) {
+  const params = new URLSearchParams(search);
+  return {
+    prompt: params.get("prompt") ?? "",
+    filename: params.get("filename") ?? "",
+    intent: parseIntent(params.get("intent"))
+  };
+}
+
+function parseIntent(raw: string | null): {
+  prefill?: { record_count?: number | null; output_format?: string | null; interaction_type?: string | null };
+} | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(decodeURIComponent(raw));
+  } catch {
+    return null;
+  }
 }
 
 async function createSession(key: WorkflowConfig["key"], intent: string): Promise<WorkflowSession> {

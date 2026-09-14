@@ -32,6 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 api = [
   "fastapi>=0.110",
+  "python-multipart>=0.0.9",
   "uvicorn>=0.29"
 ]
 database = [
@@ -61,12 +62,16 @@ pdf = [
   "fpdf2>=2.8.7",
   "langdetect>=1.0.9"
 ]
+postgresql = [
+  "psycopg[binary]>=3.1"
+]
 schema = [
   "duckdb>=0.9",
   "scipy>=1.10",
   "simpleeval>=1.0.7"
 ]
 test = [
+  "httpx>=0.28",
   "pytest>=7"
 ]
 ui = [

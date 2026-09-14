@@ -1,0 +1,30 @@
+{
+  "created_at": "2026-09-11T06:03:51.459447+00:00",
+  "error": null,
+  "id": "b2a68ab991304411befb626b9ead2323",
+  "kind": "schema.generate",
+  "payload": {
+    "request": {
+      "export_format": "csv",
+      "llm_text_enabled": false,
+      "locale": "en_US",
+      "max_llm_rows": 50,
+      "preview_rows": 100,
+      "row_count": 100,
+      "seed": 42
+    },
+    "session_id": "d6cf2108b34b454c8c472134af29d9d3"
+  },
+  "progress": [
+    "queued",
+    "running",
+    "loading schema",
+    "running schema-driven pipeline",
+    "packaging download"
+  ],
+  "result": {
+    "session_id": "d6cf2108b34b454c8c472134af29d9d3"
+  },
+  "status": "succeeded",
+  "updated_at": "2026-09-11T06:03:52.009031+00:00"
+}

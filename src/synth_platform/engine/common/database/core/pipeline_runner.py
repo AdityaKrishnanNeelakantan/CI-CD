@@ -45,6 +45,10 @@ from synth_platform.engine.generation.database.relational_service import (
 from synth_platform.engine.generation.database.target_write_service import run_target_write
 from synth_platform.engine.training.database.registry import get_synthesizer_adapter_class
 from synth_platform.engine.training.database.service import load_training_report, run_training_and_sampling
+from synth_platform.domain.product_settings import (
+    ProductSettingsReader,
+    read_generation_defaults,
+)
 
 DOMAIN_MAPPING_FILENAME = "domain_mapping.json"
 
@@ -58,7 +62,7 @@ class DatabaseTwinPipelineConfig:
     config_path: str
     metadata_dir: Path
     target_db_path: Path
-    row_counts_by_table: dict[str, int]
+    row_counts_by_table: dict[str, int] | None = None
     sample_limit: int = 1000
     num_rows_to_generate: int = 10
     seed: int = 11
@@ -66,6 +70,21 @@ class DatabaseTwinPipelineConfig:
     chunk_size: int | None = None
     release_mode: str | None = None
     domain_model: CanonicalDomainModel | None = None
+    product_settings: ProductSettingsReader | None = None
+
+
+def resolve_database_row_counts(
+    dataset_contract: dict[str, Any],
+    row_counts_by_table: dict[str, int] | None = None,
+    *,
+    product_settings: ProductSettingsReader | None = None,
+) -> dict[str, int]:
+    """Use explicit row-count overrides or the persisted default per table."""
+
+    if row_counts_by_table:
+        return {table: max(1, int(count)) for table, count in row_counts_by_table.items()}
+    default_count = int(read_generation_defaults(product_settings)["default_record_count"])
+    return {table_name: default_count for table_name in dataset_contract.get("tables", {})}
 
 
 def _auto_approve_decisions(candidates_by_table: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -207,10 +226,15 @@ def run_database_twin_pipeline(
         )
 
     def relational_generation_handler(ctx: WorkflowContext) -> StageResult:
+        row_counts = resolve_database_row_counts(
+            ctx.artifacts["dataset_contract"],
+            config.row_counts_by_table,
+            product_settings=config.product_settings,
+        )
         result = run_relational_generation(
             ctx.artifacts["dataset_contract"],
             ctx.artifacts["adapters_by_table"],
-            config.row_counts_by_table,
+            row_counts,
             ctx.manifest,
             contract_reference="dataset_contract.json",
             seed=config.seed,

@@ -16,6 +16,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from synth_platform.application.services.transfer_service import TransferService
+from synth_platform.errors import TransferBlockedError
+from synth_platform.domain.privacy.llm_policy import LlmPolicyError
+from synth_platform.infrastructure.persistence.platform_db import get_platform_db
+from synth_platform.domain.product_settings import read_generation_defaults
+from synth_platform.engine.discovery.database.adapters.errors import SourceAdapterError
 from synth_platform.interfaces.streamlit.components.common.ux import (
     apply_llm_free_text_to_tables,
     artifact_only_banner,
@@ -40,7 +46,6 @@ from synth_platform.interfaces.streamlit.components.common.ux import (
 from synth_platform.application.workflows.database_twin import (
     PROFILE_FILENAME,
     RunManifest,
-    SQLiteSourceAdapter,
     build_sample_database,
     get_synthesizer_adapter_class,
     load_artifact,
@@ -61,6 +66,11 @@ from synth_platform.application.workflows.database_twin import (
     run_target_write,
     run_training_and_sampling,
 )
+from synth_platform.interfaces.streamlit.database_source_ui import (
+    PostgresConnectionDetails,
+    build_source_adapter,
+    postgres_connection_config,
+)
 
 st.title("Database Twin")
 platform_intro()
@@ -75,6 +85,8 @@ st.caption(
 defaults = {
     "db_workdir": None,
     "db_source_path": None,
+    "db_source_type": None,
+    "db_source_config": None,
     "db_uploaded_file_id": None,
     "db_manifest": None,
     "db_discovery": None,
@@ -126,6 +138,7 @@ render_progress(
     _progress_steps(),
     current_hint="Source → Understand → Train twin → Download artifact → Disconnect → Generate → Validate → Export",
 )
+product_defaults = read_generation_defaults(get_platform_db())
 
 def _reset_downstream(from_key: str) -> None:
     """Clear every session-state key that depends on `from_key`, so
@@ -143,6 +156,17 @@ def _reset_downstream(from_key: str) -> None:
         st.session_state[key] = defaults.get(key)
     # Stage outputs are immutable per run — a redo must start a new run dir.
     st.session_state.db_manifest = None
+
+
+def _set_source(source_type: str, connection_config: dict, source_path: Path | None = None) -> None:
+    st.session_state.db_source_type = source_type
+    st.session_state.db_source_config = connection_config
+    st.session_state.db_source_path = source_path or source_type
+    st.session_state.db_manifest = None
+    _reset_downstream("db_source_path")
+    st.session_state.db_source_type = source_type
+    st.session_state.db_source_config = connection_config
+    st.session_state.db_source_path = source_path or source_type
 
 
 def _active_manifest() -> RunManifest:
@@ -206,13 +230,13 @@ with st.container(border=True):
 with st.container(border=True):
     step_header(2, "Connect", st.session_state.db_source_path is not None)
     step_guide(
-        what="Provide a SQLite database to learn from (upload or generate a sample).",
+        what="Provide a SQLite or PostgreSQL database to learn from.",
         next_step="Discover tables and relationships.",
     )
 
     source_choice = st.radio(
         "Source",
-        ["Use a generated sample database", "Upload a SQLite file"],
+        ["Use a generated sample database", "Upload a SQLite file", "Connect to PostgreSQL"],
         horizontal=True,
         label_visibility="collapsed",
     )
@@ -222,10 +246,8 @@ with st.container(border=True):
         if st.button("Generate sample database", icon=":material/auto_awesome:"):
             path = st.session_state.db_workdir / "database_a.db"
             build_sample_database(path, seed=42, customer_count=customer_count)
-            st.session_state.db_source_path = path
-            st.session_state.db_manifest = None
-            _reset_downstream("db_source_path")
-    else:
+            _set_source("sqlite", {"path": str(path)}, source_path=path)
+    elif source_choice == "Upload a SQLite file":
         uploaded = st.file_uploader("SQLite database file", type=["db", "sqlite", "sqlite3"])
         # st.file_uploader keeps returning the same UploadedFile on every
         # rerun for as long as it stays uploaded - unlike st.button, which
@@ -240,21 +262,70 @@ with st.container(border=True):
         if uploaded is not None and uploaded.file_id != st.session_state.db_uploaded_file_id:
             path = st.session_state.db_workdir / "database_a.db"
             path.write_bytes(uploaded.getvalue())
-            st.session_state.db_source_path = path
             st.session_state.db_uploaded_file_id = uploaded.file_id
-            st.session_state.db_manifest = None
-            _reset_downstream("db_source_path")
+            _set_source("sqlite", {"path": str(path)}, source_path=path)
+    else:
+        pg_col1, pg_col2 = st.columns([2, 1])
+        with pg_col1:
+            pg_host = st.text_input("Host", placeholder="db.example.com")
+            pg_database = st.text_input("Database name")
+            pg_username = st.text_input("Username")
+            pg_password = st.text_input("Password", type="password")
+        with pg_col2:
+            pg_port = st.number_input("Port", min_value=1, max_value=65535, value=5432, step=1)
+            pg_sslmode = st.selectbox("SSL mode", ["require", "verify-full", "verify-ca", "disable"])
+            pg_schemas = st.text_input("Allowed schemas", value="public")
+            pg_tables = st.text_input("Allowed tables", placeholder="optional: public.customers, public.orders")
+
+        if st.button("Connect to PostgreSQL", icon=":material/database:"):
+            schemas = tuple(s.strip() for s in pg_schemas.split(",") if s.strip())
+            tables = tuple(t.strip() for t in pg_tables.split(",") if t.strip()) or None
+            details = PostgresConnectionDetails(
+                host=pg_host,
+                port=int(pg_port),
+                database=pg_database,
+                username=pg_username,
+                password=pg_password,
+                sslmode=pg_sslmode,
+                allowed_schemas=schemas,
+                allowed_tables=tables,
+            )
+            config = postgres_connection_config(details)
+            try:
+                adapter = build_source_adapter("postgresql", config)
+                health = adapter.test_connection()
+                if not health.get("healthy", False):
+                    raise SourceAdapterError(health.get("error", "PostgreSQL health check failed"))
+                close = getattr(adapter, "close", None)
+                if close is not None:
+                    close()
+            except Exception as exc:
+                show_user_error(
+                    "We couldn't connect to PostgreSQL.",
+                    technical=[str(exc)],
+                )
+            else:
+                _set_source("postgresql", config)
+                show_success(
+                    f"Connected to PostgreSQL database `{pg_database}` as `{pg_username}`."
+                )
 
     if st.session_state.db_source_path is not None:
-        conn = sqlite3.connect(str(st.session_state.db_source_path))
-        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        conn.close()
-        show_success(f"Connected to `{st.session_state.db_source_path.name}` — tables: {', '.join(tables)}")
+        if st.session_state.db_source_type == "sqlite":
+            conn = sqlite3.connect(str(st.session_state.db_source_path))
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            conn.close()
+            show_success(f"Connected to `{st.session_state.db_source_path.name}` — tables: {', '.join(tables)}")
+        elif st.session_state.db_source_type == "postgresql":
+            show_success("Connected to PostgreSQL source.")
 
 if st.session_state.db_source_path is None:
     st.stop()
 
-source_adapter = SQLiteSourceAdapter({"path": str(st.session_state.db_source_path)})
+source_adapter = build_source_adapter(
+    st.session_state.db_source_type,
+    st.session_state.db_source_config,
+)
 manifest = _active_manifest()
 metadata_dir = st.session_state.db_workdir / "metadata"
 
@@ -653,7 +724,7 @@ with st.container(border=True):
 
     row_counts = {}
     for table_name in loaded_artifact.manifest["tables"]:
-        default = st.session_state.db_row_counts.get(table_name, 200)
+        default = st.session_state.db_row_counts.get(table_name, int(product_defaults["default_record_count"]))
         row_counts[table_name] = st.number_input(
             f"Rows to generate — {table_name}", min_value=1, value=default, step=50, key=f"rowcount_{table_name}"
         )
@@ -716,14 +787,22 @@ with st.container(border=True):
                 batch_size=gen_batch_size,
             )
             if result.is_success() and st.session_state.db_llm_text and free_text_cols:
-                report_path = manifest.output_path("relational_generation_report.json")
-                interim = load_relational_generation_report(report_path)
-                st.session_state.db_llm_evidence = apply_llm_free_text_to_tables(
-                    interim,
-                    free_text_cols,
-                    seed=7,
-                    max_llm_rows=50,
-                )
+                try:
+                    report_path = manifest.output_path("relational_generation_report.json")
+                    interim = load_relational_generation_report(report_path)
+                    st.session_state.db_llm_evidence = apply_llm_free_text_to_tables(
+                        interim,
+                        free_text_cols,
+                        seed=7,
+                        max_llm_rows=50,
+                    )
+                except LlmPolicyError as exc:
+                    show_user_error(
+                        "External LLM providers are disabled in air-gapped mode.",
+                        technical=exc,
+                        next_action="Enable local Ollama or set SYNTH_ALLOW_EXTERNAL_LLM=true to use OpenAI/Groq.",
+                    )
+                    st.stop()
             else:
                 st.session_state.db_llm_evidence = None
         if not result.is_success():
@@ -815,6 +894,23 @@ with st.container(border=True):
                 )
                 st.stop()
             st.session_state.db_qa_report = load_qa_report(manifest.output_path("qa_report.json"))
+            get_platform_db().record_run(
+                workflow_type="database",
+                project_name=st.session_state.db_intent,
+                status="completed" if st.session_state.db_qa_report["hard_checks_passed"] else "failed",
+                validation_status="PASS" if st.session_state.db_qa_report["hard_checks_passed"] else "FAIL",
+                validation_passed=bool(st.session_state.db_qa_report["hard_checks_passed"]),
+                output_id="database_b.db",
+                metadata={
+                    "intent": st.session_state.db_intent,
+                    "source_type": st.session_state.db_source_type,
+                    "row_counts_by_table": {
+                        table: data.get("row_count")
+                        for table, data in st.session_state.db_relational_report.get("tables", {}).items()
+                    },
+                    "manifest_run_id": manifest.run_id,
+                },
+            )
             st.rerun()
     else:
         qa = st.session_state.db_qa_report
@@ -844,7 +940,7 @@ with st.container(border=True):
             ),
         )
 
-if st.session_state.db_qa_report is None or not st.session_state.db_qa_report["hard_checks_passed"]:
+if st.session_state.db_qa_report is None:
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -856,6 +952,27 @@ with st.container(border=True):
         what="Write the synthetic database and download it.",
         next_step="Done — you have a validated synthetic database.",
     )
+
+    if not st.session_state.db_qa_report["hard_checks_passed"]:
+        try:
+            TransferService(transfer_recorder=get_platform_db()).downloadable_bytes(
+                workflow="database_twin",
+                output_id="database_b.db",
+                validation_report=st.session_state.db_qa_report,
+                data=b"",
+                metadata={"file_name": "database_b.db", "intent": st.session_state.db_intent},
+            )
+        except TransferBlockedError as exc:
+            block_reason = str(exc)
+        st.download_button(
+            "Download Database B",
+            b"",
+            file_name="database_b.db",
+            icon=":material/download:",
+            disabled=True,
+        )
+        st.warning(block_reason)
+        st.stop()
 
     if st.session_state.db_write_report is None:
         if st.button("Export to target database", icon=":material/database_upload:", type="primary"):
@@ -889,8 +1006,25 @@ with st.container(border=True):
             st.caption(f"`{table_name}`: {count} rows")
         conn.close()
 
-        with open(st.session_state.db_target_path, "rb") as f:
-            st.download_button("Download Database B", f, file_name="database_b.db", icon=":material/download:")
+        try:
+            transfer = TransferService(transfer_recorder=get_platform_db()).downloadable_file(
+                workflow="database_twin",
+                output_id="database_b.db",
+                validation_report=st.session_state.db_qa_report,
+                path=st.session_state.db_target_path,
+                metadata={"file_name": "database_b.db", "intent": st.session_state.db_intent},
+            )
+            with transfer.path.open("rb") as f:
+                st.download_button("Download Database B", f, file_name="database_b.db", icon=":material/download:")
+        except TransferBlockedError as exc:
+            st.download_button(
+                "Download Database B",
+                b"",
+                file_name="database_b.db",
+                icon=":material/download:",
+                disabled=True,
+            )
+            st.warning(str(exc))
         mode_outcomes(
             [
                 "Portable trained twin artifact",

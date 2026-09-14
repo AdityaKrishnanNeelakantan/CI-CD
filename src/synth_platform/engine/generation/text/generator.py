@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set
 
@@ -19,6 +20,7 @@ from synth_platform.engine.generation.text.fallback import fallback_text
 from synth_platform.engine.generation.text.prompts import build_system_message, build_text_generation_prompt
 from synth_platform.engine.generation.text.validators import sanitize_text, validate_generated_text
 from synth_platform.engine.generation.text.vocabulary import get_domain_vocabulary
+from synth_platform.domain.privacy.llm_policy import LlmPolicy, LlmPolicyError
 
 DEFAULT_MAX_LLM_ROWS = 50
 DEFAULT_BATCH_SIZE = 25
@@ -31,7 +33,7 @@ class TextGenerationConfig:
     is_preview: bool = True
     max_llm_rows: int = DEFAULT_MAX_LLM_ROWS
     batch_size: int = DEFAULT_BATCH_SIZE
-    provider: str = "openai"
+    provider: str = "ollama"
     model: Optional[str] = None
     locale: str = "en_US"
     domain: str = "generic"
@@ -66,6 +68,9 @@ class TextGenerationEngine:
     ) -> TextGenerationResult:
         start = time.perf_counter()
         params = column.distribution_params or {}
+        null_rng = np.random.default_rng(
+            (self.config.seed or 0) + hash(f"{table_name}.{column.name}") % (2**32)
+        )
         eligibility = assess_column_eligibility(column, table_name=table_name)
         evidence = TextGenerationEvidence(table=table_name, column=column.name, rows_requested=size)
 
@@ -110,9 +115,6 @@ class TextGenerationEngine:
 
         llm_values: Dict[int, str] = {}
         provider_error: Optional[str] = None
-        null_rng = np.random.default_rng(
-            (self.config.seed or 0) + hash(f"{table_name}.{column.name}") % (2**32)
-        )
         if llm_enabled:
             try:
                 llm_values, cache_hits, attempted = self._generate_llm_batch(
@@ -131,6 +133,8 @@ class TextGenerationEngine:
                 evidence.llm_used = bool(llm_values)
                 evidence.llm_rows_attempted = attempted
                 evidence.cache_hits = cache_hits
+            except LlmPolicyError:
+                raise
             except Exception as exc:
                 provider_error = str(exc)
                 evidence.warnings.append(f"provider error: {provider_error}")
@@ -268,7 +272,35 @@ class TextGenerationEngine:
         vocab_words: List[str],
         column_purpose: Optional[str],
     ) -> List[str]:
-        provider = str(self.config.provider or "openai").lower()
+        provider = LlmPolicy.from_environment().require_provider(self.config.provider).provider
+        if provider in {"ollama", "local"}:
+            model = self.config.model or os.getenv("OLLAMA_LLM_TEXT_MODEL") or os.getenv("MVP_LLM_TEXT_MODEL") or "qwen3:8b"
+            host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            prompt = build_text_generation_prompt(
+                table_name=table_name,
+                column_name=column_name,
+                text_role=text_role,
+                rows=rows,
+                safe_context=safe_context,
+                tone=tone,
+                output_format=output_format,
+                min_words=min_words,
+                max_words=max_words,
+                locale=self.config.locale,
+                domain_hint=domain,
+                column_purpose=column_purpose,
+                domain_vocabulary=vocab_words,
+            )
+            content = _call_ollama_chat(
+                model=model,
+                host=host,
+                system=build_system_message(),
+                user=prompt,
+                timeout=self.config.timeout,
+            )
+            return self._parse_payload(content or "[]")
+        if provider in {"off", "none", "disabled", ""}:
+            raise RuntimeError("LLM generation is disabled.")
         if provider not in {"openai", "groq"}:
             raise RuntimeError(f"Unsupported LLM provider: {provider}")
         api_key = os.getenv("OPENAI_API_KEY") if provider == "openai" else os.getenv("GROQ_API_KEY")
@@ -343,3 +375,20 @@ def generate_text_column(
         table_data=table_data,
         source_series=source_series,
     )
+
+
+def _call_ollama_chat(*, model: str, host: str, system: str, user: str, timeout: float) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "stream": False,
+        "format": "json",
+    }
+    req = urllib.request.Request(
+        f"{host.rstrip('/')}/api/chat",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = json.loads(resp.read())
+    return body.get("message", {}).get("content", "")

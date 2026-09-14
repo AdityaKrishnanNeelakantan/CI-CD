@@ -352,6 +352,7 @@ def _llm_narrative_value(*, label: str, text_role: str, seed: int) -> str | None
     try:
         from synth_platform.engine.inference.schema.schema import Column
         from synth_platform.engine.generation.text import TextGenerationConfig, generate_text_column
+        from synth_platform.domain.privacy.llm_policy import LlmPolicyError
 
         column = Column(
             name=label.replace(" ", "_").lower() or "notes",
@@ -380,7 +381,9 @@ def _llm_narrative_value(*, label: str, text_role: str, seed: int) -> str | None
             return None
         text = str(value).strip()
         return text or None
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, LlmPolicyError):
+            raise
         return None
 
 

@@ -1,4 +1,4 @@
-"""Unified Streamlit product shell for the three supported workflows."""
+"""Unified Streamlit product shell for the supported workflows."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,15 +15,22 @@ def run() -> None:
 
     pages_dir = Path(__file__).resolve().parent / "pages"
     home = st.Page(str(pages_dir / "home.py"), title="Home", icon=":material/home:", default=True)
+    my_projects = st.Page(str(pages_dir / "my_projects.py"), title="My Projects", icon=":material/folder:")
+    settings = st.Page(str(pages_dir / "settings.py"), title="Settings", icon=":material/settings:")
     schema = st.Page(str(pages_dir / "schema_twin.py"), title="Schema Mode", icon=":material/schema:")
     database = st.Page(str(pages_dir / "database_twin.py"), title="Database Twin", icon=":material/database:")
     pdf = st.Page(str(pages_dir / "pdf_twin.py"), title="PDF Twin", icon=":material/description:")
+    interaction = st.Page(
+        str(pages_dir / "interaction_twin.py"),
+        title="Customer Interaction Twin",
+        icon=":material/support_agent:",
+    )
 
     page = st.navigation(
         {
-            "Platform": [home],
-            "Create": [schema, database, pdf],
+            "Platform": [home, my_projects, settings],
+            "Create": [schema, database, pdf, interaction],
         },
-        position="top",
+        position="sidebar",
     )
     page.run()

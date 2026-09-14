@@ -1,0 +1,1161 @@
+{
+  "name": "schema",
+  "generated_at": "2026-09-10T23:03:51.994499",
+  "mvp_report": "validation",
+  "version": 1,
+  "passed": true,
+  "export_ready": true,
+  "validation_contract": {
+    "hard_validation_status": "PASS",
+    "advisory_fidelity_status": "PASS",
+    "privacy_status": "NOT_AVAILABLE",
+    "rule_status": "NOT_AVAILABLE",
+    "artifact_status": "PASS",
+    "validation_scope": "full_export",
+    "sampled_rows": 700,
+    "exact_rows": 700,
+    "failure_reason": null,
+    "fix_suggestion": null,
+    "hard_fail_reasons": [],
+    "review_reasons": [],
+    "export_ready": true
+  },
+  "summary": {
+    "tables": 7,
+    "total_rows": 700,
+    "hard_guarantees_passed": true,
+    "hard_validation_status": "PASS",
+    "advisory_fidelity_status": "PASS",
+    "export_ready": true,
+    "validation_scope": "full_export",
+    "locale_domain_fit_passed": true,
+    "quality_score": 91.0,
+    "fidelity_score": 91.9,
+    "final_readiness": "PASS",
+    "metrics_passed": true
+  },
+  "guarantees": {
+    "validation": {
+      "is_clean": true,
+      "has_errors": false,
+      "has_warnings": false,
+      "tables_checked": 7,
+      "columns_checked": 35,
+      "total_rows": 700,
+      "summary": "==================================================\nDATA VALIDATION REPORT\n==================================================\nTables checked: 7\nColumns checked: 35\nTotal rows: 700\n--------------------------------------------------\n\u274c Errors: 0\n\u26a0\ufe0f Warnings: 0\n\u2139\ufe0f Info: 0\n--------------------------------------------------\n\u2705 All validations passed!\n==================================================",
+      "issues": []
+    },
+    "row_count_fulfillment": {
+      "passed": true,
+      "tables": {
+        "customers": {
+          "expected_rows": 100,
+          "actual_rows": 100,
+          "passed": true
+        },
+        "branches": {
+          "expected_rows": 100,
+          "actual_rows": 100,
+          "passed": true
+        },
+        "merchants": {
+          "expected_rows": 100,
+          "actual_rows": 100,
+          "passed": true
+        },
+        "accounts": {
+          "expected_rows": 100,
+          "actual_rows": 100,
+          "passed": true
+        },
+        "cards": {
+          "expected_rows": 100,
+          "actual_rows": 100,
+          "passed": true
+        },
+        "loans": {
+          "expected_rows": 100,
+          "actual_rows": 100,
+          "passed": true
+        },
+        "transactions": {
+          "expected_rows": 100,
+          "actual_rows": 100,
+          "passed": true
+        }
+      }
+    },
+    "constraints": {
+      "passed": true,
+      "validation_errors": 0,
+      "quality_errors": 0
+    },
+    "export_validation": {
+      "passed": true,
+      "validation_scope": "full_export",
+      "tables": {
+        "customers": {
+          "expected": 100,
+          "actual": 100,
+          "passed": true,
+          "path": ".staging/api/schema_outputs/d6cf2108b34b454c8c472134af29d9d3/b2a68ab991304411befb626b9ead2323/customers.csv"
+        },
+        "branches": {
+          "expected": 100,
+          "actual": 100,
+          "passed": true,
+          "path": ".staging/api/schema_outputs/d6cf2108b34b454c8c472134af29d9d3/b2a68ab991304411befb626b9ead2323/branches.csv"
+        },
+        "merchants": {
+          "expected": 100,
+          "actual": 100,
+          "passed": true,
+          "path": ".staging/api/schema_outputs/d6cf2108b34b454c8c472134af29d9d3/b2a68ab991304411befb626b9ead2323/merchants.csv"
+        },
+        "loans": {
+          "expected": 100,
+          "actual": 100,
+          "passed": true,
+          "path": ".staging/api/schema_outputs/d6cf2108b34b454c8c472134af29d9d3/b2a68ab991304411befb626b9ead2323/loans.csv"
+        },
+        "accounts": {
+          "expected": 100,
+          "actual": 100,
+          "passed": true,
+          "path": ".staging/api/schema_outputs/d6cf2108b34b454c8c472134af29d9d3/b2a68ab991304411befb626b9ead2323/accounts.csv"
+        },
+        "cards": {
+          "expected": 100,
+          "actual": 100,
+          "passed": true,
+          "path": ".staging/api/schema_outputs/d6cf2108b34b454c8c472134af29d9d3/b2a68ab991304411befb626b9ead2323/cards.csv"
+        },
+        "transactions": {
+          "expected": 100,
+          "actual": 100,
+          "passed": true,
+          "path": ".staging/api/schema_outputs/d6cf2108b34b454c8c472134af29d9d3/b2a68ab991304411befb626b9ead2323/transactions.csv"
+        }
+      },
+      "pk": {
+        "customers": {
+          "column": "customer_id",
+          "total": 100,
+          "distinct": 100,
+          "passed": true
+        },
+        "branches": {
+          "column": "branch_id",
+          "total": 100,
+          "distinct": 100,
+          "passed": true
+        },
+        "merchants": {
+          "column": "merchant_id",
+          "total": 100,
+          "distinct": 100,
+          "passed": true
+        },
+        "accounts": {
+          "column": "account_id",
+          "total": 100,
+          "distinct": 100,
+          "passed": true
+        },
+        "cards": {
+          "column": "card_id",
+          "total": 100,
+          "distinct": 100,
+          "passed": true
+        },
+        "loans": {
+          "column": "loan_id",
+          "total": 100,
+          "distinct": 100,
+          "passed": true
+        },
+        "transactions": {
+          "column": "transaction_id",
+          "total": 100,
+          "distinct": 100,
+          "passed": true
+        }
+      },
+      "fk": [
+        {
+          "check": "accounts.customer_id->customers.customer_id",
+          "orphan_rows": 0,
+          "passed": true
+        },
+        {
+          "check": "accounts.branch_id->branches.branch_id",
+          "orphan_rows": 0,
+          "passed": true
+        },
+        {
+          "check": "cards.account_id->accounts.account_id",
+          "orphan_rows": 0,
+          "passed": true
+        },
+        {
+          "check": "loans.customer_id->customers.customer_id",
+          "orphan_rows": 0,
+          "passed": true
+        },
+        {
+          "check": "transactions.account_id->accounts.account_id",
+          "orphan_rows": 0,
+          "passed": true
+        },
+        {
+          "check": "transactions.merchant_id->merchants.merchant_id",
+          "orphan_rows": 0,
+          "passed": true
+        }
+      ],
+      "schema_columns": {},
+      "row_count_passed": true,
+      "pk_passed": true,
+      "fk_passed": true
+    }
+  },
+  "advisory": {
+    "quality": {
+      "score": 91.0,
+      "passed": true,
+      "summary": "Quality Score: 91.0/100 | Errors: 0 | Warnings: 3",
+      "stats": {
+        "tables_checked": 7,
+        "total_rows": 700,
+        "total_columns": 35,
+        "error_count": 0,
+        "warning_count": 3,
+        "info_count": 0,
+        "format_checks": 0,
+        "banking_checks": 0
+      },
+      "issues": [
+        {
+          "severity": "warning",
+          "category": "distribution",
+          "table": "customers",
+          "column": "credit_score",
+          "message": "Score column 'credit_score' has max 839 > expected 100",
+          "details": {
+            "actual_max": 839,
+            "expected_max": 100
+          }
+        },
+        {
+          "severity": "warning",
+          "category": "duplicate_density",
+          "table": "branches",
+          "column": "branch_name",
+          "message": "High repetition in 'branches.branch_name': top value appears in 30.0% of rows.",
+          "details": {
+            "top_value": "A customer favorite for comfort, performance, and long-term value.",
+            "top_count": 30,
+            "top_ratio": 0.3
+          }
+        },
+        {
+          "severity": "warning",
+          "category": "duplicate_density",
+          "table": "branches",
+          "column": "manager_name",
+          "message": "High repetition in 'branches.manager_name': top value appears in 31.0% of rows.",
+          "details": {
+            "top_value": "Built for teams that want quality, durability, and fast setup.",
+            "top_count": 31,
+            "top_ratio": 0.31
+          }
+        }
+      ]
+    },
+    "privacy": {
+      "k_anonymity": {
+        "customers": 1,
+        "branches": 1,
+        "merchants": 2
+      },
+      "singling_out_risk": {
+        "customers": 1.0,
+        "branches": 86.0,
+        "merchants": 0.0
+      },
+      "overall_risk_score": 8.0,
+      "issues": [
+        "customers: k-anonymity=1 below heuristic threshold 5",
+        "branches: k-anonymity=1 below heuristic threshold 5",
+        "merchants: k-anonymity=2 below heuristic threshold 5"
+      ],
+      "heuristic": true
+    },
+    "fidelity": {
+      "timestamp": "2026-09-10T23:03:51.983509",
+      "overall_score": 91.9,
+      "grade": "A",
+      "results": [
+        {
+          "name": "customers.credit_score",
+          "test": "numeric distribution",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "customers.created_at",
+          "test": "date range",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "loans.customer_id",
+          "test": "fk distribution",
+          "score": 84.0,
+          "details": {
+            "unique_fk_values": 62,
+            "cv": 0.48
+          }
+        },
+        {
+          "name": "loans.loan_amount",
+          "test": "numeric distribution",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "loans.interest_rate",
+          "test": "numeric distribution",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "loans.start_date",
+          "test": "date range",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "accounts.customer_id",
+          "test": "fk distribution",
+          "score": 82.3,
+          "details": {
+            "unique_fk_values": 68,
+            "cv": 0.53
+          }
+        },
+        {
+          "name": "accounts.branch_id",
+          "test": "fk distribution",
+          "score": 81.7,
+          "details": {
+            "unique_fk_values": 60,
+            "cv": 0.55
+          }
+        },
+        {
+          "name": "accounts.account_type",
+          "test": "categorical distribution",
+          "score": 82.0,
+          "details": {
+            "total_variation_distance": 0.09
+          }
+        },
+        {
+          "name": "accounts.balance_usd",
+          "test": "numeric distribution",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "accounts.open_date",
+          "test": "date range",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "cards.account_id",
+          "test": "fk distribution",
+          "score": 84.4,
+          "details": {
+            "unique_fk_values": 64,
+            "cv": 0.47
+          }
+        },
+        {
+          "name": "cards.card_type",
+          "test": "categorical distribution",
+          "score": 76.0,
+          "details": {
+            "total_variation_distance": 0.12
+          }
+        },
+        {
+          "name": "cards.expiration_date",
+          "test": "date range",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "transactions.account_id",
+          "test": "fk distribution",
+          "score": 80.9,
+          "details": {
+            "unique_fk_values": 57,
+            "cv": 0.57
+          }
+        },
+        {
+          "name": "transactions.merchant_id",
+          "test": "fk distribution",
+          "score": 82.7,
+          "details": {
+            "unique_fk_values": 62,
+            "cv": 0.52
+          }
+        },
+        {
+          "name": "transactions.amount_usd",
+          "test": "numeric distribution",
+          "score": 100.0,
+          "details": {}
+        },
+        {
+          "name": "transactions.transaction_date",
+          "test": "date range",
+          "score": 100.0,
+          "details": {}
+        }
+      ],
+      "heuristic": true
+    },
+    "locale_domain_fit": {
+      "passed": true,
+      "locale": "en_US",
+      "domain": null,
+      "checks": [
+        {
+          "name": "customers.city",
+          "test": "locale city",
+          "passed": true,
+          "details": {
+            "expected_pool": [
+              "New York",
+              "Los Angeles",
+              "Chicago",
+              "Houston",
+              "Phoenix",
+              "Philadelphia",
+              "San Antonio",
+              "San Diego",
+              "Dallas",
+              "San Jose"
+            ],
+            "match_ratio": 1.0
+          }
+        },
+        {
+          "name": "branches.city",
+          "test": "locale city",
+          "passed": true,
+          "details": {
+            "expected_pool": [
+              "New York",
+              "Los Angeles",
+              "Chicago",
+              "Houston",
+              "Phoenix",
+              "Philadelphia",
+              "San Antonio",
+              "San Diego",
+              "Dallas",
+              "San Jose"
+            ],
+            "match_ratio": 1.0
+          }
+        },
+        {
+          "name": "merchants.city",
+          "test": "locale city",
+          "passed": true,
+          "details": {
+            "expected_pool": [
+              "New York",
+              "Los Angeles",
+              "Chicago",
+              "Houston",
+              "Phoenix",
+              "Philadelphia",
+              "San Antonio",
+              "San Diego",
+              "Dallas",
+              "San Jose"
+            ],
+            "match_ratio": 1.0
+          }
+        }
+      ]
+    },
+    "data_card": {
+      "name": "schema",
+      "generated_at": "2026-09-10T23:03:51.987944",
+      "tables": {
+        "customers": {
+          "rows": 100,
+          "columns": [
+            "customer_id",
+            "first_name",
+            "last_name",
+            "email",
+            "city",
+            "credit_score",
+            "created_at"
+          ],
+          "dtypes": {
+            "customer_id": "object",
+            "first_name": "object",
+            "last_name": "object",
+            "email": "object",
+            "city": "object",
+            "credit_score": "int64",
+            "created_at": "datetime64[ns]"
+          }
+        },
+        "branches": {
+          "rows": 100,
+          "columns": [
+            "branch_id",
+            "branch_name",
+            "manager_name",
+            "city",
+            "country"
+          ],
+          "dtypes": {
+            "branch_id": "object",
+            "branch_name": "object",
+            "manager_name": "object",
+            "city": "object",
+            "country": "object"
+          }
+        },
+        "merchants": {
+          "rows": 100,
+          "columns": [
+            "merchant_id",
+            "merchant_name",
+            "city"
+          ],
+          "dtypes": {
+            "merchant_id": "object",
+            "merchant_name": "object",
+            "city": "object"
+          }
+        },
+        "loans": {
+          "rows": 100,
+          "columns": [
+            "loan_id",
+            "customer_id",
+            "loan_amount",
+            "interest_rate",
+            "start_date"
+          ],
+          "dtypes": {
+            "loan_id": "object",
+            "customer_id": "object",
+            "loan_amount": "float64",
+            "interest_rate": "float64",
+            "start_date": "datetime64[ns]"
+          }
+        },
+        "accounts": {
+          "rows": 100,
+          "columns": [
+            "account_id",
+            "customer_id",
+            "branch_id",
+            "account_type",
+            "balance_usd",
+            "open_date"
+          ],
+          "dtypes": {
+            "account_id": "object",
+            "customer_id": "object",
+            "branch_id": "object",
+            "account_type": "object",
+            "balance_usd": "float64",
+            "open_date": "datetime64[ns]"
+          }
+        },
+        "cards": {
+          "rows": 100,
+          "columns": [
+            "card_id",
+            "account_id",
+            "card_type",
+            "expiration_date"
+          ],
+          "dtypes": {
+            "card_id": "object",
+            "account_id": "object",
+            "card_type": "object",
+            "expiration_date": "datetime64[ns]"
+          }
+        },
+        "transactions": {
+          "rows": 100,
+          "columns": [
+            "transaction_id",
+            "account_id",
+            "merchant_id",
+            "amount_usd",
+            "transaction_date"
+          ],
+          "dtypes": {
+            "transaction_id": "object",
+            "account_id": "object",
+            "merchant_id": "object",
+            "amount_usd": "float64",
+            "transaction_date": "datetime64[ns]"
+          }
+        }
+      },
+      "notes": [
+        "Heuristic metadata summary for generated synthetic data.",
+        "Includes explicit realism configuration."
+      ]
+    },
+    "structured_report": {
+      "validation": {
+        "is_clean": true,
+        "has_errors": false,
+        "has_warnings": false,
+        "tables_checked": 7,
+        "columns_checked": 35,
+        "total_rows": 700,
+        "summary": "==================================================\nDATA VALIDATION REPORT\n==================================================\nTables checked: 7\nColumns checked: 35\nTotal rows: 700\n--------------------------------------------------\n\u274c Errors: 0\n\u26a0\ufe0f Warnings: 0\n\u2139\ufe0f Info: 0\n--------------------------------------------------\n\u2705 All validations passed!\n==================================================",
+        "issues": []
+      },
+      "quality": {
+        "score": 91.0,
+        "passed": true,
+        "summary": "Quality Score: 91.0/100 | Errors: 0 | Warnings: 3",
+        "stats": {
+          "tables_checked": 7,
+          "total_rows": 700,
+          "total_columns": 35,
+          "error_count": 0,
+          "warning_count": 3,
+          "info_count": 0,
+          "format_checks": 0,
+          "banking_checks": 0
+        },
+        "issues": [
+          {
+            "severity": "warning",
+            "category": "distribution",
+            "table": "customers",
+            "column": "credit_score",
+            "message": "Score column 'credit_score' has max 839 > expected 100",
+            "details": {
+              "actual_max": 839,
+              "expected_max": 100
+            }
+          },
+          {
+            "severity": "warning",
+            "category": "duplicate_density",
+            "table": "branches",
+            "column": "branch_name",
+            "message": "High repetition in 'branches.branch_name': top value appears in 30.0% of rows.",
+            "details": {
+              "top_value": "A customer favorite for comfort, performance, and long-term value.",
+              "top_count": 30,
+              "top_ratio": 0.3
+            }
+          },
+          {
+            "severity": "warning",
+            "category": "duplicate_density",
+            "table": "branches",
+            "column": "manager_name",
+            "message": "High repetition in 'branches.manager_name': top value appears in 31.0% of rows.",
+            "details": {
+              "top_value": "Built for teams that want quality, durability, and fast setup.",
+              "top_count": 31,
+              "top_ratio": 0.31
+            }
+          }
+        ]
+      },
+      "fidelity": {
+        "timestamp": "2026-09-10T23:03:51.983509",
+        "overall_score": 91.9,
+        "grade": "A",
+        "results": [
+          {
+            "name": "customers.credit_score",
+            "test": "numeric distribution",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "customers.created_at",
+            "test": "date range",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "loans.customer_id",
+            "test": "fk distribution",
+            "score": 84.0,
+            "details": {
+              "unique_fk_values": 62,
+              "cv": 0.48
+            }
+          },
+          {
+            "name": "loans.loan_amount",
+            "test": "numeric distribution",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "loans.interest_rate",
+            "test": "numeric distribution",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "loans.start_date",
+            "test": "date range",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "accounts.customer_id",
+            "test": "fk distribution",
+            "score": 82.3,
+            "details": {
+              "unique_fk_values": 68,
+              "cv": 0.53
+            }
+          },
+          {
+            "name": "accounts.branch_id",
+            "test": "fk distribution",
+            "score": 81.7,
+            "details": {
+              "unique_fk_values": 60,
+              "cv": 0.55
+            }
+          },
+          {
+            "name": "accounts.account_type",
+            "test": "categorical distribution",
+            "score": 82.0,
+            "details": {
+              "total_variation_distance": 0.09
+            }
+          },
+          {
+            "name": "accounts.balance_usd",
+            "test": "numeric distribution",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "accounts.open_date",
+            "test": "date range",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "cards.account_id",
+            "test": "fk distribution",
+            "score": 84.4,
+            "details": {
+              "unique_fk_values": 64,
+              "cv": 0.47
+            }
+          },
+          {
+            "name": "cards.card_type",
+            "test": "categorical distribution",
+            "score": 76.0,
+            "details": {
+              "total_variation_distance": 0.12
+            }
+          },
+          {
+            "name": "cards.expiration_date",
+            "test": "date range",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "transactions.account_id",
+            "test": "fk distribution",
+            "score": 80.9,
+            "details": {
+              "unique_fk_values": 57,
+              "cv": 0.57
+            }
+          },
+          {
+            "name": "transactions.merchant_id",
+            "test": "fk distribution",
+            "score": 82.7,
+            "details": {
+              "unique_fk_values": 62,
+              "cv": 0.52
+            }
+          },
+          {
+            "name": "transactions.amount_usd",
+            "test": "numeric distribution",
+            "score": 100.0,
+            "details": {}
+          },
+          {
+            "name": "transactions.transaction_date",
+            "test": "date range",
+            "score": 100.0,
+            "details": {}
+          }
+        ],
+        "heuristic": true
+      }
+    },
+    "metrics": {
+      "generation_mode": "schema_driven",
+      "targets": {
+        "schema_match": 1.0,
+        "type_adherence": 0.999,
+        "ks_similarity": 0.85,
+        "tv_similarity": 0.85,
+        "missing_similarity": 0.9,
+        "correlation_similarity": 0.8,
+        "business_fidelity": 0.8,
+        "pii_replay_count": 0,
+        "exact_row_match": 0.0,
+        "rule_pass_rate": 1.0
+      },
+      "schema_match": {
+        "metric": "schema_match",
+        "score": 1.0,
+        "target": 1.0,
+        "passed": true,
+        "matched_fields": 72,
+        "total_expected_fields": 72,
+        "mismatches": []
+      },
+      "type_adherence": {
+        "metric": "type_adherence",
+        "score": 1.0,
+        "target": 0.999,
+        "passed": true,
+        "matching_values": 0,
+        "non_null_values": 0,
+        "columns": []
+      },
+      "rule_pass_rate": {
+        "metric": "rule_pass_rate",
+        "score": 1.0,
+        "target": 1.0,
+        "passed": true,
+        "passed_rules": 0,
+        "total_rules": 0,
+        "rules": []
+      },
+      "missing_similarity": {
+        "metric": "missing_similarity",
+        "score": 1.0,
+        "target": 0.9,
+        "passed": true,
+        "columns": [
+          {
+            "table": "customers",
+            "column": "customer_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "customers",
+            "column": "first_name",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "customers",
+            "column": "last_name",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "customers",
+            "column": "email",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "customers",
+            "column": "city",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "customers",
+            "column": "credit_score",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "customers",
+            "column": "created_at",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "branches",
+            "column": "branch_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "branches",
+            "column": "branch_name",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "branches",
+            "column": "manager_name",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "branches",
+            "column": "city",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "branches",
+            "column": "country",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "merchants",
+            "column": "merchant_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "merchants",
+            "column": "merchant_name",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "merchants",
+            "column": "city",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "accounts",
+            "column": "account_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "accounts",
+            "column": "customer_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "accounts",
+            "column": "branch_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "accounts",
+            "column": "account_type",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "accounts",
+            "column": "balance_usd",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "accounts",
+            "column": "open_date",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "cards",
+            "column": "card_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "cards",
+            "column": "account_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "cards",
+            "column": "card_type",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "cards",
+            "column": "expiration_date",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "loans",
+            "column": "loan_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "loans",
+            "column": "customer_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "loans",
+            "column": "loan_amount",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "loans",
+            "column": "interest_rate",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "loans",
+            "column": "start_date",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "transactions",
+            "column": "transaction_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "transactions",
+            "column": "account_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "transactions",
+            "column": "merchant_id",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "transactions",
+            "column": "amount_usd",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          },
+          {
+            "table": "transactions",
+            "column": "transaction_date",
+            "expected_null_rate": 0.0,
+            "actual_null_rate": 0.0,
+            "missing_similarity": 1.0
+          }
+        ]
+      },
+      "privacy": {
+        "pii_replay_count": {
+          "metric": "pii_replay_count",
+          "score": 0,
+          "target": 0,
+          "passed": true,
+          "note": "No source table provided; replay check skipped."
+        },
+        "exact_row_match": {
+          "metric": "exact_row_match",
+          "score": 0.0,
+          "rate": 0.0,
+          "target": 0.0,
+          "passed": true,
+          "note": "No source table provided; exact-row check skipped."
+        }
+      },
+      "final_readiness": {
+        "metric": "final_readiness",
+        "status": "PASS",
+        "passed": true,
+        "hard_fail_reasons": [],
+        "review_reasons": []
+      }
+    }
+  },
+  "reproducibility": {
+    "seed": 42,
+    "schema_name": "schema",
+    "domain": null,
+    "locale": "en_US",
+    "sampled": false
+  },
+  "notes": [
+    "Validation, row counts, referential integrity, and configured constraints are hard checks.",
+    "Privacy, fidelity, locale fit, and quality scores are advisory heuristics."
+  ]
+}
